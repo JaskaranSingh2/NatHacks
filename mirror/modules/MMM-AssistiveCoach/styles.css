@@ -1,0 +1,345 @@
+:root {
+	--ease-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
+	--ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+body .assistivecoach {
+	font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+	color: #f5f5f5;
+	font-size: calc(16px * var(--font-scale, 1));
+	position: relative;
+	width: 100vw;
+	height: 100vh;
+	overflow: hidden;
+}
+
+.assistivecoach.high-contrast {
+	background-color: rgba(0, 0, 0, 0.8);
+}
+
+/* Reduced Motion Support */
+.prefers-reduced-motion * {
+	animation-duration: 0.01ms !important;
+	animation-iteration-count: 1 !important;
+	transition-duration: 0.01ms !important;
+}
+
+/* HUD Animations */
+.hud {
+	opacity: 0;
+	transform: translateY(20px);
+}
+
+.hud--in {
+	animation: hudIn 450ms var(--ease-soft) forwards;
+}
+
+@keyframes hudIn {
+	from {
+		opacity: 0;
+		transform: translateY(20px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.assistivecoach .hud-card {
+	max-width: 400px;
+	padding: 24px;
+	margin: 32px;
+	background: rgba(20, 20, 20, 0.85);
+	border-radius: 18px;
+	border: 2px solid #4da3ff;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.assistivecoach .hud-card h1 {
+	font-size: clamp(48px, 6vw, 64px);
+	margin: 0 0 12px 0;
+	font-weight: 700;
+}
+
+.assistivecoach .hud-step {
+	font-size: 28px;
+	margin: 0 0 8px 0;
+	color: #9ed4ff;
+}
+
+.assistivecoach .hud-subtitle {
+	font-size: 24px;
+	margin: 0 0 16px 0;
+}
+
+/* Progress Bar */
+.progress-wrap {
+	width: 100%;
+	height: 12px;
+	border-radius: 8px;
+	background-color: rgba(255, 255, 255, 0.1);
+	overflow: hidden;
+	margin-bottom: 16px;
+}
+
+.progress {
+	height: 100%;
+	background: linear-gradient(90deg, #4da3ff, #71ffef);
+	transform-origin: left;
+	transform: scaleX(0);
+	will-change: transform;
+}
+
+.assistivecoach .hud-progress {
+	width: 100%;
+	height: 12px;
+	border-radius: 8px;
+	background-color: rgba(255, 255, 255, 0.1);
+	overflow: hidden;
+	margin-bottom: 16px;
+}
+
+.assistivecoach .hud-progress div {
+	height: 100%;
+	background: linear-gradient(90deg, #4da3ff, #71ffef);
+	transition: width 0.4s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.assistivecoach .hud-progress div {
+		transition: none;
+	}
+}
+
+.assistivecoach .hud-hint {
+	font-size: 22px;
+	margin: 0;
+	color: #fffa9e;
+}
+
+/* New Overlay Structure */
+#assistive-coach {
+	position: relative;
+	width: 100vw;
+	height: 100vh;
+}
+
+#overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+}
+
+#hud {
+	position: relative;
+	z-index: 10;
+}
+
+#chips {
+	position: absolute;
+	top: 24px;
+	right: 24px;
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+	z-index: 20;
+}
+
+.hud-title {
+	font-size: clamp(48px, 6vw, 64px);
+	margin: 0 0 12px 0;
+	font-weight: 700;
+}
+
+.hud-step {
+	font-size: 28px;
+	margin: 0 0 8px 0;
+	color: #9ed4ff;
+}
+
+.hud-subtitle {
+	font-size: 24px;
+	margin: 0 0 16px 0;
+}
+
+.assistivecoach #assistivecoach-overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+}
+
+/* Ring Animations */
+.ring {
+	fill: none;
+	stroke-width: 6;
+	stroke: #00d1ff;
+	will-change: transform, opacity;
+}
+
+.ring--pulse {
+	animation: ringPulse 1.5s var(--ease-soft) infinite;
+}
+
+@keyframes ringPulse {
+	0% {
+		transform: scale(1);
+		opacity: 0.3;
+	}
+	50% {
+		transform: scale(1.05);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1);
+		opacity: 0.3;
+	}
+}
+
+.shape-ring {
+	fill: none;
+	stroke-width: 8;
+	stroke: #4da3ff;
+	animation: pulse 1.5s ease-in-out infinite;
+}
+
+.shape-ring.info {
+	stroke: #4da3ff;
+}
+
+.shape-ring.neutral {
+	stroke: #aaaaaa;
+}
+
+.shape-ring.no-motion {
+	animation: none;
+}
+
+.shape-arrow {
+	stroke: #ffffff;
+	stroke-width: 6;
+	stroke-linecap: round;
+}
+
+.shape-badge {
+	fill: rgba(0, 0, 0, 0.85);
+	stroke: #ffd369;
+	stroke-width: 2;
+}
+
+.shape-badge-text {
+	fill: #ffd369;
+	font-size: 24px;
+	text-anchor: middle;
+	font-weight: 600;
+}
+
+@keyframes pulse {
+	0% {
+		opacity: 0.2;
+	}
+	50% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0.2;
+	}
+}
+
+.assistivecoach #assistivecoach-chips {
+	position: absolute;
+	top: 24px;
+	right: 24px;
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+	z-index: 20;
+}
+
+/* Device Status Chips */
+.chip {
+	padding: 10px 16px;
+	border-radius: 999px;
+	font-size: 18px;
+	font-weight: 600;
+	border: 2px solid transparent;
+	color: #0a0a0a;
+	background-color: #d1d1d1;
+	transition: background-color 0.3s var(--ease-soft),
+		transform 0.2s var(--ease-soft);
+	will-change: background-color, transform;
+}
+
+.chip:focus-visible,
+.chip:hover {
+	outline: none;
+	border-color: #ffffff;
+	transform: scale(1.05);
+}
+
+.chip--ok {
+	background-color: #4cff8f;
+	color: #052f17;
+}
+
+.chip--warn {
+	background-color: #ffd369;
+	color: #3f2b00;
+}
+
+.chip--off {
+	background-color: #555555;
+	color: #f2f2f2;
+}
+
+.assistivecoach .chip {
+	padding: 10px 16px;
+	border-radius: 999px;
+	font-size: 18px;
+	font-weight: 600;
+	border: 2px solid transparent;
+	color: #0a0a0a;
+	background-color: #d1d1d1;
+	transition: transform 0.2s ease;
+}
+
+.assistivecoach .chip:focus-visible,
+.assistivecoach .chip:hover {
+	outline: none;
+	border-color: #ffffff;
+	transform: scale(1.05);
+}
+
+.assistivecoach .chip.ok {
+	background-color: #4cff8f;
+	color: #052f17;
+}
+
+.assistivecoach .chip.warn {
+	background-color: #ffd369;
+	color: #3f2b00;
+}
+
+.assistivecoach .chip.off {
+	background-color: #555555;
+	color: #f2f2f2;
+}
+
+.assistivecoach .hud-alert {
+	margin-top: 16px;
+	padding: 12px 16px;
+	border-radius: 12px;
+	background-color: #ff4f5e;
+	color: #ffffff;
+	font-size: 24px;
+}
+
+.assistivecoach.large {
+	font-size: 20px;
+}
+
+.assistivecoach.xlarge {
+	font-size: 24px;
+}
