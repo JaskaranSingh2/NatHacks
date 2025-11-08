@@ -1,94 +1,93 @@
 # NatHacks Assistive Mirror
 
-Plain-English snapshot of the prototype for customers and non-engineers.
+Raspberry Pi smart mirror that guides morning routines with on-device computer vision and an optional Google Cloud Vision assist. Built for <150 ms capture→overlay latency while keeping the UX senior-friendly.
 
-## What We Built
+## System At A Glance
 
-An assistive smart mirror that guides morning grooming (e.g. brushing teeth) using a camera, real‑time face landmark tracking, and a clean animated heads‑up display (HUD). Runs on Raspberry Pi hardware + MagicMirror² with no heavy frameworks.
+- **Edge-first loop:** MediaPipe Face Mesh + hands run locally for low jitter overlays and resilient offline behaviour.
+- **Cloud assist (optional):** Non-blocking Google Cloud Vision fallback refines mouth/cheek landmarks when credentials are present.
+- **HUD overlays:** Animated rings, progress bars, and routine hints streamed to the MagicMirror module via WebSocket.
+- **Observability:** `logs/latency.csv` captures FPS, latency, and new cloud metrics; `/health` exposes a structured status payload for the frontend.
 
-## Key Capabilities
+## Repository Map
 
-- Real-time face landmark tracking (mouth, cheeks, brows) with MediaPipe Face Mesh (optimized via region-of-interest cropping).
-- Clear HUD: large text, progress bar, pulsing guidance rings placed at target facial regions for each routine step.
-- Reduced-motion accessibility: detects `prefers-reduced-motion` and disables animations automatically.
-- Low-latency pipeline (<150 ms target capture→overlay) using a background vision thread + WebSocket streaming.
-- CSV performance logging (latency + FPS) for validation on device.
+- `backend/app.py` – FastAPI service, REST/WebSocket endpoints, settings/state management.
+- `backend/vision_pipeline.py` – Camera loop, MediaPipe processing, cloud fusion, CSV logging.
+- `backend/cloud_vision.py` – Rate-limited Google Cloud Vision client with caching + circuit breaker.
+- `config/` – Feature indices (`features.json`) and scripted routines (`tasks.json`).
+- `mirror/` – MagicMirror module that renders the overlay stream.
+- `scripts/` – Shell helpers (`test_vision_pipeline.sh`, `test_animations.sh`).
 
-## Why It Matters
+## Getting Started
 
-- Helps older adults or anyone with routine adherence challenges by turning abstract timing into visual guidance.
-- Designed for inexpensive hardware (Pi 4/5) with careful optimizations: ROI cropping, EMA smoothing, single long-lived MediaPipe graph.
-- High contrast, senior-friendly typography and motion choices that avoid visual overload.
-
-## Running the Prototype
-
-### Prerequisites
-
-- Python 3.10+
-- Node.js + MagicMirror² (for the display module)
-
-### Backend (FastAPI)
-
-1. Create and activate a virtual environment:
+### 1. Backend setup
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+pip install -r backend/requirements.txt
+
+# Run the API (default :5055)
+uvicorn backend.app:app --host 0.0.0.0 --port 5055
 ```
 
-1. Install dependencies (minimal example):
+Use `python backend/vision_pipeline.py` for a ten-second standalone smoke test (writes to `logs/latency.csv`).
+
+### 2. Optional Google Cloud Vision assist
+
+1. Provision a Vision API credential and point `GOOGLE_APPLICATION_CREDENTIALS` at the JSON key file.
+2. Start the backend; the client auto-enables when credentials are readable.
+3. Toggle runtime behaviour via `POST /settings`:
 
 ```bash
-pip install mediapipe opencv-python numpy fastapi uvicorn
+curl -X POST http://localhost:5055/settings \
+	-H 'Content-Type: application/json' \
+	-d '{
+				"use_cloud": true,
+				"cloud_rps": 2,
+				"cloud_timeout_s": 0.8,
+				"cloud_min_interval_ms": 600
+			}'
 ```
 
-1. Start the API (port 5055 by default):
+Cloud requests run in a background worker. The edge loop keeps broadcasting even if the Cloud Vision rate limiter trips or the circuit breaker opens.
 
-```bash
-cd backend
-uvicorn app:app --host 0.0.0.0 --port 5055
+### 3. MagicMirror module
+
+Install the `MMM-AssistiveCoach` module under MagicMirror², configure the backend URL (`ws://<host>:5055/ws/mirror`), and start MagicMirror. The module automatically renders `overlay.set` messages and surfaces `/health` status chips.
+
+## Operating Notes
+
+### Key FastAPI endpoints
+
+- `GET /health` – Returns camera status, FPS/latency, and a `cloud` block (`enabled`, `latency_ms`, `ok_count`, `fail_count`, `breaker_open`, `last_ok_ns`).
+- `POST /settings` – Toggle detectors (`face`, `hands`, `aruco`, `use_cloud`) and adjust cloud rate limits.
+- `POST /session/start` – Begin a guided routine; pipeline pushes HUD metadata immediately.
+- `POST /tts` – Queue speech output via eSpeak-NG or PyTTSx3.
+- `WebSocket /ws/mirror` – Overlay stream for the MagicMirror client.
+
+### Observability
+
+`logs/latency.csv` (auto-created) now includes:
+
+```text
+capture_ts,landmark_ts,overlay_ts,e2e_ms,fps,use_cloud,cloud_latency_ms,cloud_confidence,cloud_ok,cloud_breaker_open
 ```
 
-### Vision Standalone Smoke Test
+Use `scripts/test_vision_pipeline.sh` to exercise standalone and integrated modes; it reports average latency, CSV growth, and cloud assist statistics.
 
-```bash
-python backend/vision_pipeline.py
-```
+### Troubleshooting
 
-Watch console stats for FPS and latency; press Ctrl+C to stop.
+- **No camera frames:** Ensure `/dev/video0` is accessible; `backend/camera_capture.py` logs when it cannot open the device.
+- **Cloud assist not engaging:** Verify `GOOGLE_APPLICATION_CREDENTIALS`, then inspect `/health` → `cloud.breaker_open` and the `cloud_*` columns in `logs/latency.csv`.
+- **High latency (>150 ms):** Check for throttled hardware (Pi running in powersave) and confirm that ROI cropping is active by watching the log warnings.
 
-### Frontend (MagicMirror Module)
+## Roadmap
 
-Add `MMM-AssistiveCoach` to your MagicMirror `config.js`, then start MagicMirror. The module connects to the backend WebSocket and renders incoming `overlay.set` messages.
-
-## What You’ll See
-
-- A cyan ring near the mouth that tracks movement smoothly.
-- A HUD card: title, current step, remaining time, hint.
-- Progress bar growing over the step duration.
-- Status chips (camera / lighting / mic) changing color as conditions change.
-- Graceful fallback hint if face not detected for a short period.
-
-## Notable Files
-
-- `backend/vision_pipeline.py` – Vision loop, ROI crop, smoothing, CSV logging.
-- `backend/app.py` – FastAPI app and WebSocket broadcast integration.
-- `mirror/modules/MMM-AssistiveCoach/` – Frontend module (animations + rendering).
-- `config/features.json` – Landmark groups (mouth, cheeks, brows, etc.).
-- `config/tasks.json` – Routine steps and target anchors.
-- `logs/latency.csv` – Generated performance log (created at runtime).
-
-## Suggested Next Steps Before Public Release
-
-- Add `backend/requirements.txt` locking minimal versions.
-- Include a lightweight `README-DEV.md` with deeper setup + testing details.
-- Decide on enabling optional cloud vision fallback (flag currently dormant).
-- Add a license file (e.g. MIT, Apache 2.0, or proprietary notice).
-
-## Contact
-
-For technical or partnership inquiries, refer to repository ownership metadata or project lead.
+- Expand automated tests around the cloud fusion path and CSV parsing.
+- Add configurable overlay themes within the MagicMirror module.
+- Package scripts into a simple installer for Raspberry Pi images.
 
 ## License
 
-Internal prototype (unlicensed). Add a formal license prior to distribution.
+Internal prototype (unlicensed). Add a formal license before external distribution.

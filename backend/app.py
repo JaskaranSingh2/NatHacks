@@ -135,6 +135,9 @@ class SettingsPayload(BaseModel):
     face: Optional[bool] = None
     hands: Optional[bool] = None
     aruco: Optional[bool] = None
+    cloud_rps: Optional[int] = Field(default=None, ge=1, le=10)
+    cloud_timeout_s: Optional[float] = Field(default=None, ge=0.1, le=3.0)
+    cloud_min_interval_ms: Optional[int] = Field(default=None, ge=0)
 
 
 class HealthState(BaseModel):
@@ -143,6 +146,12 @@ class HealthState(BaseModel):
     fps: float = 0.0
     latency_ms: float = 0.0
     last_frame_ns: Optional[int] = None
+    cloud_enabled: bool = False
+    cloud_ok_count: int = 0
+    cloud_fail_count: int = 0
+    cloud_breaker_open: bool = False
+    cloud_latency_ms: float = 0.0
+    cloud_last_ok_ns: Optional[int] = None
 
 
 class HealthResponse(BaseModel):
@@ -151,6 +160,7 @@ class HealthResponse(BaseModel):
     fps: float
     latency_ms: float
     vision_state: Optional[Dict[str, Any]] = None
+    cloud: Optional[Dict[str, Any]] = None
 
 
 class SettingsState(BaseModel):
@@ -158,6 +168,9 @@ class SettingsState(BaseModel):
     face: bool = True
     hands: bool = True
     aruco: bool = False
+    cloud_rps: int = 2
+    cloud_timeout_s: float = 0.8
+    cloud_min_interval_ms: int = 600
 
 
 class SessionState(BaseModel):
@@ -331,13 +344,24 @@ async def get_health() -> HealthResponse:
             "latency_ms": health_state.latency_ms,
             "last_frame_ns": health_state.last_frame_ns,
         }
-    
+    cloud_state = None
+    if health_state.cloud_enabled or health_state.cloud_latency_ms > 0:
+        cloud_state = {
+            "enabled": health_state.cloud_enabled,
+            "latency_ms": health_state.cloud_latency_ms,
+            "ok_count": health_state.cloud_ok_count,
+            "fail_count": health_state.cloud_fail_count,
+            "breaker_open": health_state.cloud_breaker_open,
+            "last_ok_ns": health_state.cloud_last_ok_ns,
+        }
+
     return HealthResponse(
         camera=health_state.camera,
         lighting=health_state.lighting,
         fps=health_state.fps,
         latency_ms=health_state.latency_ms,
-        vision_state=vision_state
+        vision_state=vision_state,
+        cloud=cloud_state,
     )
 
 
@@ -429,6 +453,11 @@ async def update_settings(payload: SettingsPayload) -> JSONResponse:
     updated = payload.dict(exclude_none=True)
     for key, value in updated.items():
         setattr(settings_state, key, value)
+    if _vision_pipeline and {"cloud_rps", "cloud_timeout_s", "cloud_min_interval_ms"}.intersection(updated):
+        try:
+            _vision_pipeline.refresh_cloud_limits()
+        except Exception as exc:
+            LOGGER.warning("Failed to refresh cloud limits: %s", exc)
     LOGGER.info("Settings updated: %s", updated)
     return JSONResponse(settings_state.dict())
 

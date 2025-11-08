@@ -40,6 +40,13 @@ if [ -f "logs/latency.csv" ]; then
     else
         echo -e "${RED}✗ Latency exceeds target (${AVG_LATENCY}ms > 150ms)${NC}"
     fi
+
+    CLOUD_LATENCY=$(tail -n +2 logs/latency.csv | awk -F',' '{if($7>0){sum+=$7; count++}} END {if(count>0) printf "%.2f", sum/count; else print "0"}')
+    CLOUD_OK=$(tail -n +2 logs/latency.csv | awk -F',' '{ok+=$9} END {print ok}')
+    CLOUD_BREAKER=$(tail -n +2 logs/latency.csv | awk -F',' '{open+=$10} END {print open}')
+    echo "Cloud assist frames (ok): ${CLOUD_OK}"
+    echo "Cloud average latency: ${CLOUD_LATENCY}ms"
+    echo "Cloud breaker trips: ${CLOUD_BREAKER}"
 else
     echo -e "${RED}✗ latency.csv not found${NC}"
 fi
@@ -168,6 +175,7 @@ echo "  [ ] No deadlocks; clean shutdown works"
 echo "  [ ] latency.csv grows during run"
 echo "  [ ] /health returns vision_state with fps/latency_ms"
 echo "  [ ] Session start immediately shows Step 1 HUD"
+echo "  [ ] Cloud metrics present in /health and latency.csv"
 echo ""
 echo "Next Steps:"
 echo "  1. Review logs/latency.csv for performance metrics"

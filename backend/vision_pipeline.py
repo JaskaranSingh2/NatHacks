@@ -6,11 +6,14 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+
+from backend.cloud_vision import CloudVisionClient
 
 LOGGER = logging.getLogger("assistivecoach.vision")
 
@@ -31,8 +34,8 @@ def _load_json(path: Path) -> Dict[str, Any]:
 class VisionPipeline:
     """
     Processes camera frames with MediaPipe Face Mesh & Hands.
-    Emits overlay messages via broadcast callback.
-    Target: <150ms capture→overlay latency on Pi 4/5.
+    Optionally blends in Google Cloud Vision landmarks via a non-blocking worker.
+    Emits overlay messages via broadcast callback with <150ms latency target on Pi 4/5.
     """
 
     def __init__(
@@ -89,10 +92,21 @@ class VisionPipeline:
         self._last_face_bbox: Optional[Tuple[int, int, int, int]] = None  # (x, y, w, h)
         self._no_face_since: Optional[float] = None
         
-        # Initialize MediaPipe models
+        # Initialize MediaPipe models and optional cloud assist
         self._mediapipe = self._init_mediapipe()
         self._hand_detector = self._init_hands()
-        self._cloud_client = self._detect_cloud_client()
+        self._cloud_client = CloudVisionClient()
+        self._cloud_executor: Optional[ThreadPoolExecutor] = None
+        self._cloud_future: Optional[Future[Optional[Dict[str, Any]]]] = None
+        self._cloud_latest: Optional[Dict[str, Any]] = None
+        self._cloud_result_ttl_s = 1.5
+        self._cloud_last_latency_ms = 0.0
+        self._cloud_last_confidence = 0.0
+        self._cloud_last_ok = False
+        if self._cloud_client.enabled:
+            self._cloud_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="CloudVision")
+        self.refresh_cloud_limits()
+        self._refresh_cloud_health()
         
         # Ensure logs directory exists
         LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -100,7 +114,10 @@ class VisionPipeline:
         # Initialize CSV header if file doesn't exist
         if not LOGS_PATH.exists():
             with LOGS_PATH.open("w", encoding="utf-8") as f:
-                f.write("capture_ts,landmark_ts,overlay_ts,e2e_ms,fps,use_cloud\n")
+                f.write(
+                    "capture_ts,landmark_ts,overlay_ts,e2e_ms,fps,use_cloud,"
+                    "cloud_latency_ms,cloud_confidence,cloud_ok,cloud_breaker_open\n"
+                )
         
         LOGGER.info("VisionPipeline initialized: %dx%d @ %dfps", camera_width, camera_height, camera_fps)
 
@@ -135,17 +152,6 @@ class VisionPipeline:
             LOGGER.warning("MediaPipe Hands not available")
             return None
 
-    def _detect_cloud_client(self) -> Any:  # pragma: no cover
-        """Detect Google Cloud Vision client (optional)."""
-        try:
-            from google.cloud import vision  # type: ignore[import]
-            client = vision.ImageAnnotatorClient()  # type: ignore[attr-defined]
-            LOGGER.info("Google Cloud Vision client available")
-            return client
-        except Exception as exc:
-            LOGGER.debug("Google Cloud Vision unavailable: %s", exc)
-            return None
-
     def start(self) -> None:
         """Start the vision pipeline background thread."""
         if self._running:
@@ -166,6 +172,10 @@ class VisionPipeline:
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+        if self._cloud_executor:
+            self._cloud_executor.shutdown(wait=False)
+            self._cloud_executor = None
+        self._cloud_future = None
         self.camera.close()
         LOGGER.info("Vision pipeline stopped")
 
@@ -187,34 +197,57 @@ class VisionPipeline:
             
             frame_count += 1
             landmark_start = time.time()
-            
+            self.health.last_frame_ns = capture_ts_ns
+
+            # Update any completed cloud vision work before processing this frame.
+            self._resolve_cloud_future()
+            self._refresh_cloud_health()
+
             # Get frame dimensions
             frame_h, frame_w = frame_rgb.shape[:2]
             self.frame_w = frame_w
             self.frame_h = frame_h
-            
+
             # ROI optimization: crop around last known face
             roi_frame, roi_offset = self._apply_roi(frame_rgb)
-            
+
             # Process landmarks (MediaPipe or synthetic mode)
             landmarks = self._process_landmarks(roi_frame, roi_offset)
-            
+
             # Process hands if enabled
-            hand_landmarks = {}
+            hand_landmarks: Dict[str, Tuple[float, float]] = {}
             if self.settings.hands and self._hand_detector:
                 hand_landmarks = self._process_hands(roi_frame, roi_offset)
-            
+
             # Detect ArUco markers if enabled
-            ar_anchors = []
+            ar_anchors: List[Dict[str, Any]] = []
             if self.settings.aruco:
                 try:
                     from backend.ar_overlay import detect_aruco_anchors
                     ar_anchors = detect_aruco_anchors(frame_rgb)
                 except (RuntimeError, ImportError) as exc:
                     LOGGER.debug("ArUco detection unavailable: %s", exc)
-            
+
             landmark_ts = time.time()
-            
+
+            cloud_latency_ms = 0.0
+            cloud_confidence = 0.0
+            cloud_ok = False
+            if self.settings.use_cloud and self._cloud_client.enabled:
+                active_cloud = self._active_cloud_result()
+                if active_cloud and isinstance(active_cloud.get("landmarks"), dict):
+                    cloud_confidence = float(active_cloud.get("confidence", 0.0) or 0.0)
+                    cloud_latency_ms = float(active_cloud.get("latency_ms", 0.0) or 0.0)
+                    cloud_ok = bool(active_cloud.get("ok", False))
+                    landmarks = self._merge_cloud_landmarks(
+                        landmarks,
+                        active_cloud.get("landmarks", {}),
+                        cloud_confidence,
+                    )
+                self._submit_cloud_job(frame_rgb)
+            else:
+                self._cloud_latest = None
+
             # Build overlay message
             all_landmarks = {**landmarks, **hand_landmarks}
             overlay_shapes = self._build_shapes(all_landmarks, frame_w, frame_h, ar_anchors)
@@ -233,9 +266,25 @@ class VisionPipeline:
             # Update health metrics
             e2e_ms = (overlay_ts - capture_ts) * 1000.0
             self.health.latency_ms = e2e_ms
+            self._refresh_cloud_health()
+            if self.settings.use_cloud and self._cloud_client.enabled:
+                if cloud_latency_ms == 0.0:
+                    cloud_latency_ms = self.health.cloud_latency_ms
+            else:
+                cloud_latency_ms = 0.0
+                cloud_confidence = 0.0
+                cloud_ok = False
             
             # Log to CSV
-            self._log_latency(capture_ts, landmark_ts, overlay_ts, e2e_ms)
+            self._log_latency(
+                capture_ts,
+                landmark_ts,
+                overlay_ts,
+                e2e_ms,
+                cloud_latency_ms,
+                cloud_confidence,
+                cloud_ok,
+            )
             
             # Check for "no face" condition
             if not landmarks and self.settings.face:
@@ -544,17 +593,114 @@ class VisionPipeline:
         }
         self.broadcast_fn(hint_msg)
 
+    def refresh_cloud_limits(self) -> None:
+        """Update cloud client rate limits from shared settings state."""
+        if not self._cloud_client.enabled:
+            return
+        rps = getattr(self.settings, "cloud_rps", self._cloud_client.rps)
+        timeout_s = getattr(self.settings, "cloud_timeout_s", self._cloud_client.timeout_s)
+        min_interval_ms = getattr(self.settings, "cloud_min_interval_ms", self._cloud_client.min_interval_ms)
+        self._cloud_client.update_limits(int(rps), float(timeout_s), int(min_interval_ms))
+
+    def _resolve_cloud_future(self) -> None:
+        if not self._cloud_future or not self._cloud_future.done():
+            return
+        try:
+            result = self._cloud_future.result()
+        except Exception as exc:  # pragma: no cover - defensive log
+            LOGGER.debug("Cloud future error: %s", exc)
+            result = None
+        finally:
+            self._cloud_future = None
+
+        if result:
+            self._cloud_latest = result
+            self._cloud_last_latency_ms = float(result.get("latency_ms", self._cloud_last_latency_ms))
+            self._cloud_last_confidence = float(result.get("confidence", self._cloud_last_confidence))
+            self._cloud_last_ok = bool(result.get("ok", True))
+        else:
+            self._cloud_last_ok = False
+
+    def _active_cloud_result(self) -> Optional[Dict[str, Any]]:
+        if not self._cloud_latest:
+            return None
+        ts_ns_raw = self._cloud_latest.get("ts_ns")
+        if isinstance(ts_ns_raw, (int, float)) and ts_ns_raw > 0:
+            age_s = (time.time_ns() - int(ts_ns_raw)) / 1e9
+            if age_s > self._cloud_result_ttl_s:
+                return None
+        return self._cloud_latest
+
+    def _merge_cloud_landmarks(
+        self,
+        base: Dict[str, Tuple[float, float]],
+        cloud_landmarks: Dict[str, Any],
+        confidence: float,
+    ) -> Dict[str, Tuple[float, float]]:
+        if not isinstance(cloud_landmarks, dict):
+            return base
+        blended = dict(base)
+        weight = confidence if confidence > 0 else 0.5
+        weight = max(0.2, min(0.8, weight))
+        for name, coords in cloud_landmarks.items():
+            if not isinstance(coords, (list, tuple)) or len(coords) != 2:
+                continue
+            cx = float(coords[0])
+            cy = float(coords[1])
+            cx = min(1.0, max(0.0, cx))
+            cy = min(1.0, max(0.0, cy))
+            if name in blended:
+                lx, ly = blended[name]
+                target = (
+                    lx * (1.0 - weight) + cx * weight,
+                    ly * (1.0 - weight) + cy * weight,
+                )
+            else:
+                target = (cx, cy)
+            blended[name] = self._smooth(name, target)
+        return blended
+
+    def _submit_cloud_job(self, frame_rgb: np.ndarray) -> None:
+        if not self._cloud_executor or self._cloud_future is not None:
+            return
+        bbox = self._last_face_bbox
+        if bbox is None:
+            frame_h, frame_w = frame_rgb.shape[:2]
+            bbox = (0, 0, frame_w, frame_h)
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        roi_bytes = CloudVisionClient.roi_bytes(frame_bgr, bbox)
+        if not roi_bytes:
+            return
+        self._cloud_future = self._cloud_executor.submit(self._cloud_client.detect_faces, roi_bytes)
+
+    def _refresh_cloud_health(self) -> None:
+        metrics = self._cloud_client.metrics()
+        enabled = bool(metrics.get("enabled")) and self.settings.use_cloud
+        self.health.cloud_enabled = enabled
+        self.health.cloud_ok_count = int(metrics.get("ok_count", 0))
+        self.health.cloud_fail_count = int(metrics.get("fail_count", 0))
+        self.health.cloud_breaker_open = bool(metrics.get("breaker_open", False)) if enabled else False
+        self.health.cloud_latency_ms = float(metrics.get("latency_ms", 0.0)) if enabled else 0.0
+        self.health.cloud_last_ok_ns = metrics.get("last_ok_ns") if enabled else None
+
     def _log_latency(
         self,
         capture_ts: float,
         landmark_ts: float,
         overlay_ts: float,
-        e2e_ms: float
+        e2e_ms: float,
+        cloud_latency_ms: float,
+        cloud_confidence: float,
+        cloud_ok: bool,
     ) -> None:
         """Append latency metrics to CSV log."""
         use_cloud = self.settings.use_cloud
         fps = self.health.fps
-        record = f"{capture_ts:.6f},{landmark_ts:.6f},{overlay_ts:.6f},{e2e_ms:.2f},{fps:.1f},{int(use_cloud)}\n"
+        record = (
+            f"{capture_ts:.6f},{landmark_ts:.6f},{overlay_ts:.6f},{e2e_ms:.2f},{fps:.1f},"
+            f"{int(use_cloud)},{cloud_latency_ms:.2f},{cloud_confidence:.2f},{int(cloud_ok)},"
+            f"{int(self.health.cloud_breaker_open)}\n"
+        )
         try:
             with LOGS_PATH.open("a", encoding="utf-8") as handle:
                 handle.write(record)
