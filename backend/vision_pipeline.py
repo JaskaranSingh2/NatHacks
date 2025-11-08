@@ -48,6 +48,9 @@ class VisionPipeline:
         camera_height: int = 720,
         camera_fps: int = 24,
         camera_device: int = 0,
+        *,
+        camera_enabled: bool = True,
+        camera_override: Optional[Any] = None,
     ) -> None:
         """
         Initialize vision pipeline.
@@ -68,8 +71,23 @@ class VisionPipeline:
         self.health = health
         
         # Initialize camera
-        from backend.camera_capture import CameraCapture
-        self.camera = CameraCapture(camera_width, camera_height, camera_fps, camera_device)
+        if camera_override is not None:
+            self.camera = camera_override
+        elif camera_enabled:
+            from backend.camera_capture import CameraCapture
+            self.camera = CameraCapture(camera_width, camera_height, camera_fps, camera_device)
+        else:
+            class _DummyCamera:
+                def __init__(self, width: int, height: int) -> None:
+                    self.width = width
+                    self.height = height
+                def read(self) -> Tuple[np.ndarray, int]:
+                    frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                    ts = time.time_ns()
+                    return frame, ts
+                def close(self) -> None:
+                    pass
+            self.camera = _DummyCamera(camera_width, camera_height)
         self.frame_w = camera_width
         self.frame_h = camera_height
         

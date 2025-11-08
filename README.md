@@ -41,13 +41,13 @@ Use `python backend/vision_pipeline.py` for a ten-second standalone smoke test (
 
 ```bash
 curl -X POST http://localhost:5055/settings \
-	-H 'Content-Type: application/json' \
-	-d '{
-				"use_cloud": true,
-				"cloud_rps": 2,
-				"cloud_timeout_s": 0.8,
-				"cloud_min_interval_ms": 600
-			}'
+  -H 'Content-Type: application/json' \
+  -d '{
+        "use_cloud": true,
+        "cloud_rps": 2,
+        "cloud_timeout_s": 0.8,
+        "cloud_min_interval_ms": 600
+      }'
 ```
 
 Cloud requests run in a background worker. The edge loop keeps broadcasting even if the Cloud Vision rate limiter trips or the circuit breaker opens.
@@ -75,6 +75,42 @@ capture_ts,landmark_ts,overlay_ts,e2e_ms,fps,use_cloud,cloud_latency_ms,cloud_co
 ```
 
 Use `scripts/test_vision_pipeline.sh` to exercise standalone and integrated modes; it reports average latency, CSV growth, and cloud assist statistics.
+
+### Development & Testing
+
+ 
+#### Running Unit Tests
+
+Pytest covers cloud blending and client caching/rate limiting logic. Run all tests:
+
+```bash
+python3 -m pytest -q backend/tests
+```
+
+ 
+#### Hardware Independence
+
+`VisionPipeline` supports a dummy camera via `camera_enabled=False` so CI and local tests don't require `/dev/video0`.
+
+```python
+pipeline = VisionPipeline(camera_enabled=False)
+```
+
+You can also inject a custom stub with `camera_override` exposing a minimal `read()` returning `(True, frame)`.
+
+ 
+#### Focused Iteration
+
+Run a single test module or increase verbosity while developing:
+
+```bash
+python3 -m pytest backend/tests/test_cloud_blending.py -vv
+```
+
+ 
+#### Adding Tests
+
+Place new files under `backend/tests/` named `test_*.py`. Keep tests deterministic: mock time-sensitive cloud calls and fix random seeds. Prefer unit-level checks over full frame loops unless explicitly benchmarking latency.
 
 ### Troubleshooting
 

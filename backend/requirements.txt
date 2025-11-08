@@ -7,3 +7,4 @@ websockets==12.0
 pydantic==1.10.15
 pyttsx3==2.90
 numpy==1.26.4
+pytest==8.3.3
