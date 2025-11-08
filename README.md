@@ -1,79 +1,94 @@
-NatHacks — Assistive Mirror (Customer Snapshot)
+# NatHacks Assistive Mirror
 
-## What we built
+Plain-English snapshot of the prototype for customers and non-engineers.
 
-A self-contained assistive smart mirror prototype that helps people complete morning grooming routines using a camera, real-time computer vision, and a simple animated HUD on a MagicMirror² display.
+## What We Built
 
-Key capabilities
+An assistive smart mirror that guides morning grooming (e.g. brushing teeth) using a camera, real‑time face landmark tracking, and a clean animated heads‑up display (HUD). Runs on Raspberry Pi hardware + MagicMirror² with no heavy frameworks.
 
-- Real-time face landmark tracking (mouth, cheeks, brows) using MediaPipe Face Mesh. The system focuses on a single user and crops the camera image to a small region around the face to run faster on modest hardware.
-- Smooth, senior-friendly HUD and overlays (rings, progress bar, large readable text) implemented with vanilla JavaScript, SVG and GPU-friendly CSS animations. Respects users' reduced-motion settings.
-- A backend service (FastAPI) that streams overlay messages to the MagicMirror module via a thread-safe queue + WebSockets. The vision component runs in a background thread and publishes overlay messages as JSON.
-- CSV latency logging for capture→landmark→overlay timing, and a compact test-suite for local verification.
+## Key Capabilities
 
-Why this matters
+- Real-time face landmark tracking (mouth, cheeks, brows) with MediaPipe Face Mesh (optimized via region-of-interest cropping).
+- Clear HUD: large text, progress bar, pulsing guidance rings placed at target facial regions for each routine step.
+- Reduced-motion accessibility: detects `prefers-reduced-motion` and disables animations automatically.
+- Low-latency pipeline (<150 ms target capture→overlay) using a background vision thread + WebSocket streaming.
+- CSV performance logging (latency + FPS) for validation on device.
 
-- Designed for low-cost devices (Raspberry Pi 4/5) with careful performance optimizations (ROI crop, EMA smoothing, single MediaPipe graph) so overlays feel responsive and stable.
-- UI is high-contrast and readable for older adults and supports accessibility via `prefers-reduced-motion`.
+## Why It Matters
 
-## Quick start (developer)
+- Helps older adults or anyone with routine adherence challenges by turning abstract timing into visual guidance.
+- Designed for inexpensive hardware (Pi 4/5) with careful optimizations: ROI cropping, EMA smoothing, single long-lived MediaPipe graph.
+- High contrast, senior-friendly typography and motion choices that avoid visual overload.
 
-Prerequisites
+## Running the Prototype
 
-- Python 3.10+ (or your system Python)
-- Node.js + MagicMirror² if running the frontend module locally
+### Prerequisites
 
-Backend (quick run)
+- Python 3.10+
+- Node.js + MagicMirror² (for the display module)
 
-1. Install Python deps (use a virtualenv):
+### Backend (FastAPI)
+
+1. Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r backend/requirements.txt  # if present
-pip install mediapipe opencv-python numpy
 ```
 
-2. Start the backend API (default port 5055):
+1. Install dependencies (minimal example):
+
+```bash
+pip install mediapipe opencv-python numpy fastapi uvicorn
+```
+
+1. Start the API (port 5055 by default):
 
 ```bash
 cd backend
 uvicorn app:app --host 0.0.0.0 --port 5055
 ```
 
-3. Run the MagicMirror with the `MMM-AssistiveCoach` module loaded, or point any WebSocket-capable client at the backend to receive `overlay.set` messages.
-
-Standalone vision test
+### Vision Standalone Smoke Test
 
 ```bash
-# runs the vision pipeline in CLI mode (prints lightweight stats)
 python backend/vision_pipeline.py
 ```
 
-What to expect
+Watch console stats for FPS and latency; press Ctrl+C to stop.
 
-- A pulsing ring overlay near the user's mouth and a large HUD card describing the current routine step.
-- Smooth progress bar animations and non-jarring color changes for device status.
-- If no face is detected, the system will show a gentle hint asking the user to reposition.
+### Frontend (MagicMirror Module)
 
-Files of interest
+Add `MMM-AssistiveCoach` to your MagicMirror `config.js`, then start MagicMirror. The module connects to the backend WebSocket and renders incoming `overlay.set` messages.
 
-- `backend/vision_pipeline.py` — Vision loop, ROI optimization, EMA smoothing, CSV logging
-- `backend/app.py` — FastAPI integration and startup/shutdown lifecycle
-- `mirror/modules/MMM-AssistiveCoach/` — MagicMirror frontend module (animations + overlay rendering)
-- `config/features.json` & `config/tasks.json` — Landmarks mapping and routine definitions
-- `logs/latency.csv` — Capture/processing/broadcast timing data
+## What You’ll See
 
-Next steps (recommended before a public push)
+- A cyan ring near the mouth that tracks movement smoothly.
+- A HUD card: title, current step, remaining time, hint.
+- Progress bar growing over the step duration.
+- Status chips (camera / lighting / mic) changing color as conditions change.
+- Graceful fallback hint if face not detected for a short period.
 
-- Run the included `test_vision_pipeline.sh` on a Raspberry Pi to validate <150ms capture→overlay latency and jitter targets.
-- Decide whether to include cloud-based fallbacks (Google Vision) — currently flagged but not enabled by default.
-- Add a minimal `requirements.txt` in `backend/` (if missing) and a short `README-DEV.md` with environment setup steps for CI.
+## Notable Files
 
-Contact
+- `backend/vision_pipeline.py` – Vision loop, ROI crop, smoothing, CSV logging.
+- `backend/app.py` – FastAPI app and WebSocket broadcast integration.
+- `mirror/modules/MMM-AssistiveCoach/` – Frontend module (animations + rendering).
+- `config/features.json` – Landmark groups (mouth, cheeks, brows, etc.).
+- `config/tasks.json` – Routine steps and target anchors.
+- `logs/latency.csv` – Generated performance log (created at runtime).
 
-- For technical questions about this prototype, see the module source or contact the engineering lead listed in the repo.
+## Suggested Next Steps Before Public Release
 
-License
+- Add `backend/requirements.txt` locking minimal versions.
+- Include a lightweight `README-DEV.md` with deeper setup + testing details.
+- Decide on enabling optional cloud vision fallback (flag currently dormant).
+- Add a license file (e.g. MIT, Apache 2.0, or proprietary notice).
 
-- Internal prototype. Add an explicit license file before public release.
+## Contact
+
+For technical or partnership inquiries, refer to repository ownership metadata or project lead.
+
+## License
+
+Internal prototype (unlicensed). Add a formal license prior to distribution.
