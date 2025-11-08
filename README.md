@@ -78,7 +78,6 @@ Use `scripts/test_vision_pipeline.sh` to exercise standalone and integrated mode
 
 ### Development & Testing
 
- 
 #### Running Unit Tests
 
 Pytest covers cloud blending and client caching/rate limiting logic. Run all tests:
@@ -87,7 +86,6 @@ Pytest covers cloud blending and client caching/rate limiting logic. Run all tes
 python3 -m pytest -q backend/tests
 ```
 
- 
 #### Hardware Independence
 
 `VisionPipeline` supports a dummy camera via `camera_enabled=False` so CI and local tests don't require `/dev/video0`.
@@ -98,7 +96,6 @@ pipeline = VisionPipeline(camera_enabled=False)
 
 You can also inject a custom stub with `camera_override` exposing a minimal `read()` returning `(True, frame)`.
 
- 
 #### Focused Iteration
 
 Run a single test module or increase verbosity while developing:
@@ -107,12 +104,33 @@ Run a single test module or increase verbosity while developing:
 python3 -m pytest backend/tests/test_cloud_blending.py -vv
 ```
 
- 
 #### Adding Tests
 
 Place new files under `backend/tests/` named `test_*.py`. Keep tests deterministic: mock time-sensitive cloud calls and fix random seeds. Prefer unit-level checks over full frame loops unless explicitly benchmarking latency.
 
 ### Troubleshooting
+
+### Tool Guidance (ArUco)
+
+The mirror can guide tool positioning using printed ArUco markers (OpenCV dictionary **DICT_5X5_250**). Place marker **23** near a toothbrush and marker **42** near a razor. Guidance has two modes:
+
+1. 2D fallback (no calibration): distance-only states SEARCHING → ALIGNING → GOOD.
+2. Pose-enabled (after chessboard calibration): adds tilt hints (rotate / tilt) when yaw/pitch exceed tolerances.
+
+Enable guidance:
+
+```bash
+curl -X POST http://localhost:5055/settings -H 'Content-Type: application/json' \
+  -d '{"aruco": true, "pose": true}'
+```
+
+Calibrate (optional for 6DoF): run `python scripts/calibrate_cam.py` and save `config/camera_intrinsics.yml`; then restart backend so pose estimation activates.
+
+Performance: detection subsampled to ~15 Hz and centers / angles smoothed with EMA (α=0.4) to keep CPU low and jitter under ~5 px.
+
+Marker printing: `python scripts/gen_aruco.py --ids 23 42 --size 500 --out markers/`.
+
+If pose disabled or intrinsics missing, pipeline automatically falls back to 2D distance guidance.
 
 - **No camera frames:** Ensure `/dev/video0` is accessible; `backend/camera_capture.py` logs when it cannot open the device.
 - **Cloud assist not engaging:** Verify `GOOGLE_APPLICATION_CREDENTIALS`, then inspect `/health` → `cloud.breaker_open` and the `cloud_*` columns in `logs/latency.csv`.
