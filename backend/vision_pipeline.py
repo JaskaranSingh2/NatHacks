@@ -20,6 +20,7 @@ LOGGER = logging.getLogger("assistivecoach.vision")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FEATURES_PATH = PROJECT_ROOT / "config" / "features.json"
 TASKS_PATH = PROJECT_ROOT / "config" / "tasks.json"
+TOOLS_PATH = PROJECT_ROOT / "config" / "tools.json"
 LOGS_PATH = PROJECT_ROOT / "logs" / "latency.csv"
 
 
@@ -94,8 +95,10 @@ class VisionPipeline:
         # Load configuration
         features_raw = _load_json(FEATURES_PATH)
         tasks_raw = _load_json(TASKS_PATH)
-        self._features: Dict[str, Any] = features_raw if isinstance(features_raw, dict) else {}
-        self._tasks: Dict[str, Any] = tasks_raw if isinstance(tasks_raw, dict) else {}
+        tools_raw = _load_json(TOOLS_PATH)
+        self._features = features_raw if isinstance(features_raw, dict) else {}
+        self._tasks = tasks_raw if isinstance(tasks_raw, dict) else {}
+        self._tools = tools_raw.get("tools", {}) if isinstance(tools_raw, dict) else {}
         
         # Thread control
         self._running = False
@@ -125,6 +128,12 @@ class VisionPipeline:
             self._cloud_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="CloudVision")
         self.refresh_cloud_limits()
         self._refresh_cloud_health()
+
+    # ArUco guidance state
+        self._aruco_last_state = {}
+        self._aruco_state_since = {}
+        self._aruco_debounce_s = 0.25
+        self._aruco_last_detection_ns = 0
         
         # Ensure logs directory exists
         LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +251,8 @@ class VisionPipeline:
             if self.settings.aruco:
                 try:
                     from backend.ar_overlay import detect_aruco_anchors
-                    ar_anchors = detect_aruco_anchors(frame_rgb)
+                    pose_enabled = bool(getattr(self.settings, "pose", True))
+                    ar_anchors = detect_aruco_anchors(frame_rgb, pose_enabled=pose_enabled)
                 except (RuntimeError, ImportError) as exc:
                     LOGGER.debug("ArUco detection unavailable: %s", exc)
 
@@ -269,6 +279,10 @@ class VisionPipeline:
             # Build overlay message
             all_landmarks = {**landmarks, **hand_landmarks}
             overlay_shapes = self._build_shapes(all_landmarks, frame_w, frame_h, ar_anchors)
+
+            if self.settings.aruco and ar_anchors:
+                guidance = self._build_tool_guidance(ar_anchors, all_landmarks, frame_w, frame_h)
+                overlay_shapes.extend(guidance)
             hud = self._build_hud()
             
             message = {
@@ -552,26 +566,123 @@ class VisionPipeline:
             )
 
         # Add ArUco marker badges
-        for anchor in ar_anchors:
-            aruco_val = anchor.get("aruco_id")
-            center = anchor.get("center_px")
-            if not isinstance(center, dict):
-                continue
-            if isinstance(aruco_val, (int, float)):
-                aruco_id = int(aruco_val)
-            else:
-                continue
-            
-            # Create badge manually (avoiding import)
-            shapes.append(
-                {
-                    "kind": "badge",
-                    "anchor": {"pixel": center},
-                    "text": "Hold here",
-                    "offset_px": {"x": 0, "y": -120},
-                }
-            )
+        # (Badge creation moved to guidance logic)
         
+        return shapes
+
+    def _build_tool_guidance(
+        self,
+        ar_anchors: List[Dict[str, Any]],
+        landmarks: Dict[str, Tuple[float, float]],
+        width: int,
+        height: int,
+    ) -> List[Dict[str, Any]]:
+        shapes: List[Dict[str, Any]] = []
+        for anchor in ar_anchors:
+            aruco_id = anchor.get("aruco_id")
+            center = anchor.get("center_px")
+            if not isinstance(center, dict) or not isinstance(aruco_id, int):
+                continue
+            tool_spec = self._tools.get(str(aruco_id))
+            if not isinstance(tool_spec, dict):
+                continue
+            snap_to = tool_spec.get("snap_to")
+            tolerances = tool_spec.get("tolerances", {})
+            dist_tol = float(tolerances.get("dist_px", 120.0))
+            yaw_tol = float(tolerances.get("yaw_deg", 25.0))
+            pitch_tol = float(tolerances.get("pitch_deg", 25.0))
+            target = None
+            if isinstance(snap_to, str) and snap_to in landmarks:
+                tx = landmarks[snap_to][0] * width
+                ty = landmarks[snap_to][1] * height
+                target = (tx, ty)
+            cx = float(center.get("x", 0.0))
+            cy = float(center.get("y", 0.0))
+            state = "SEARCHING"
+            if target is None:
+                state = "SEARCHING"
+            else:
+                dx = target[0] - cx
+                dy = target[1] - cy
+                dist = (dx * dx + dy * dy) ** 0.5
+                if dist <= dist_tol:
+                    state = "GOOD"
+                else:
+                    state = "ALIGNING"
+                # Pose tilt hints if pose data available
+                if "yaw_deg" in anchor and "pitch_deg" in anchor and state == "GOOD":
+                    yaw = abs(float(anchor.get("yaw_deg", 0.0)))
+                    pitch = abs(float(anchor.get("pitch_deg", 0.0)))
+                    if yaw > yaw_tol or pitch > pitch_tol:
+                        state = "ALIGNING"  # degrade to aligning with tilt hint
+            # Debounce transitions
+            prev = self._aruco_last_state.get(aruco_id)
+            now = time.time()
+            if prev != state:
+                # Only accept change if stable for debounce window
+                since = self._aruco_state_since.get(aruco_id, now)
+                if (now - since) < self._aruco_debounce_s:
+                    state = prev if prev else state
+                else:
+                    self._aruco_state_since[aruco_id] = now
+            self._aruco_last_state[aruco_id] = state
+
+            # Build shapes based on state
+            if state == "SEARCHING":
+                # Ghost ring at target (if known) else center
+                gx = target[0] if target else width / 2
+                gy = target[1] if target else height / 2
+                shapes.append(
+                    {
+                        "kind": "ring",
+                        "anchor": {"pixel": {"x": gx, "y": gy}},
+                        "radius_px": 70,
+                        "accent": "neutral",
+                    }
+                )
+                shapes.append(
+                    {
+                        "kind": "badge",
+                        "anchor": {"pixel": {"x": gx, "y": gy - 110}},
+                        "text": f"Find {tool_spec.get('name','tool')}",
+                    }
+                )
+            elif state == "ALIGNING" and target is not None:
+                # Arrow from marker to target
+                shapes.append(
+                    {
+                        "kind": "arrow",
+                        "anchor": {"pixel": {"x": cx, "y": cy}},
+                        "to": {"pixel": {"x": target[0], "y": target[1]}},
+                    }
+                )
+                # Optional tilt hint
+                if "yaw_deg" in anchor and "pitch_deg" in anchor:
+                    yaw = abs(float(anchor.get("yaw_deg", 0.0)))
+                    pitch = abs(float(anchor.get("pitch_deg", 0.0)))
+                    if yaw > yaw_tol:
+                        hint = "Rotate"
+                    elif pitch > pitch_tol:
+                        hint = "Tilt"
+                    else:
+                        hint = "Align"
+                else:
+                    hint = "Align"
+                shapes.append(
+                    {
+                        "kind": "badge",
+                        "anchor": {"pixel": {"x": target[0], "y": target[1] - 120}},
+                        "text": hint,
+                    }
+                )
+            elif state == "GOOD" and target is not None:
+                shapes.append(
+                    {
+                        "kind": "badge",
+                        "anchor": {"pixel": {"x": target[0], "y": target[1]}},
+                        "text": f"Hold {tool_spec.get('name','tool')} here",
+                    }
+                )
         return shapes
 
     def _build_hud(self) -> Dict[str, Any]:

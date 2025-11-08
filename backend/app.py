@@ -135,6 +135,7 @@ class SettingsPayload(BaseModel):
     face: Optional[bool] = None
     hands: Optional[bool] = None
     aruco: Optional[bool] = None
+    pose: Optional[bool] = None
     cloud_rps: Optional[int] = Field(default=None, ge=1, le=10)
     cloud_timeout_s: Optional[float] = Field(default=None, ge=0.1, le=3.0)
     cloud_min_interval_ms: Optional[int] = Field(default=None, ge=0)
@@ -168,6 +169,7 @@ class SettingsState(BaseModel):
     face: bool = True
     hands: bool = True
     aruco: bool = False
+    pose: bool = True
     cloud_rps: int = 2
     cloud_timeout_s: float = 0.8
     cloud_min_interval_ms: int = 600

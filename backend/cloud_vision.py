@@ -50,8 +50,6 @@ class CloudVisionClient:
         self._client: Any = None
 
         creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-        # creds_path = "backend/eminent-will-477604-h6-d9d50a6b65d4.json"
-        print(f"\n\n{creds_path}\n\n")
         try:
             from google.cloud import vision  # type: ignore[import]
 
@@ -60,22 +58,11 @@ class CloudVisionClient:
                 self._client = vision.ImageAnnotatorClient()  # type: ignore[attr-defined]
                 self.enabled = True
                 LOGGER.info("CloudVisionClient enabled (credentials detected)")
-                
-                # print("\033[31mREACHED\033[0m")
-                
             else:
                 self._vision = None
                 self._client = None
                 LOGGER.info("CloudVisionClient disabled (GOOGLE_APPLICATION_CREDENTIALS missing)")
-                
-                # print("\033[31mHELP\033[0m")
-                
         except Exception as exc:  # pragma: no cover - optional dependency
-            
-            # print(f"\033[31m CloudVisionClient unavailable \033[0m")
-            # print(exc)
-            
-            
             self._vision = None
             self._client = None
             LOGGER.debug("CloudVisionClient unavailable: %s", exc)
@@ -285,10 +272,6 @@ class CloudVisionClient:
             "mouth_right": self._vision.FaceAnnotation.Landmark.Type.MOUTH_RIGHT,  # type: ignore[attr-defined]
             "cheek_left": self._vision.FaceAnnotation.Landmark.Type.LEFT_CHEEK_CENTER,  # type: ignore[attr-defined]
             "cheek_right": self._vision.FaceAnnotation.Landmark.Type.RIGHT_CHEEK_CENTER,  # type: ignore[attr-defined]
-            "left_of_left_eyebrow": self._vision.FaceAnnotation.Landmark.Type.LEFT_OF_LEFT_EYEBROW,
-            "right_of_left_eyebrow": self._vision.FaceAnnotation.Landmark.Type.RIGHT_OF_LEFT_EYEBROW,
-            "left_of_right_eyebrow": self._vision.FaceAnnotation.Landmark.Type.LEFT_OF_RIGHT_EYEBROW,
-            "right_of_right_eyebrow": self._vision.FaceAnnotation.Landmark.Type.RIGHT_OF_RIGHT_EYEBROW,
         }
 
         coords: Dict[str, Tuple[float, float]] = {}
