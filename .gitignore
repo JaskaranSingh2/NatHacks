@@ -67,4 +67,4 @@ logs/latency.csv
 # Google Cloud credentials (security)
 *.json
 !config/*.json
-!test_animation.json
+!test_animation.json__pycache__/
