@@ -5,6 +5,7 @@ Quick reference for all available bash test scripts in `scripts/` directory.
 ## 🚀 Quick Commands
 
 ### System Control
+
 ```bash
 # Restart backend + MagicMirror
 ./scripts/restart_all.sh
@@ -19,36 +20,47 @@ Quick reference for all available bash test scripts in `scripts/` directory.
 ### Testing Scripts
 
 #### Test All Tasks
+
 ```bash
 ./scripts/test_all_tasks.sh
 ```
+
 Tests all 4 tasks (Brush Teeth, Wash Face, Comb Hair, Draw Eyebrows) by starting, advancing steps, and stopping.
 
 #### Test Keyboard Shortcuts
+
 ```bash
 ./scripts/test_keyboard_shortcuts.sh
 ```
+
 Simulates keyboard shortcuts 1-4 by calling task API endpoints directly.
 
 #### Test New Eyebrows Task
+
 ```bash
 ./scripts/test_eyebrows_task.sh
 ```
+
 Complete test of the Draw Eyebrows task (the new makeup task that replaced "Put on Shirt").
 
 #### Test All Tasks
+
 ```bash
 ./scripts/test_all_tasks.sh
 ```
+
 Sequential test of all 4 tasks with step advancement.
 
 ### Vision & OpenCV
 
 #### Check OpenCV Integration
+
 ```bash
 ./scripts/check_opencv.sh
 ```
+
 Verifies:
+
 - OpenCV installation and version
 - ArUco module availability
 - Camera intrinsics calibration
@@ -56,40 +68,51 @@ Verifies:
 - Integration summary
 
 #### Test ArUco Detection
+
 ```bash
 ./scripts/test_aruco.sh
 ```
+
 Tests ArUco marker detection (requires physical marker).
 
 #### Test Vision Pipeline
+
 ```bash
 ./scripts/test_vision_pipeline.sh
 ```
+
 Tests complete vision pipeline with overlays.
 
 ### Development
 
 #### Test Display/Overlays
+
 ```bash
 ./scripts/test_display.sh
 ```
+
 Tests ring + HUD overlay rendering.
 
 #### Complete Demo
+
 ```bash
 ./scripts/demo_complete.sh
 ```
+
 Runs automated demo of complete task system.
 
 #### Disable Compliments
+
 ```bash
 ./scripts/disable_compliments.sh
 ```
+
 Removes "Hey there sexy" compliment module.
 
 ## 📊 Output Examples
 
 ### Quick Status
+
 ```
 🚀 AssistiveCoach System Status
 ================================
@@ -114,6 +137,7 @@ Removes "Hey there sexy" compliment module.
 ```
 
 ### Test Keyboard Shortcuts
+
 ```
 🧪 Testing Keyboard Shortcuts (Simulating via API)
 ==================================================
@@ -132,6 +156,7 @@ Removes "Hey there sexy" compliment module.
 ```
 
 ### OpenCV Check
+
 ```
 🔍 OpenCV Integration Status Check
 ====================================
@@ -150,6 +175,7 @@ Removes "Hey there sexy" compliment module.
 ## 🎯 Typical Workflow
 
 ### Starting Development
+
 ```bash
 # Check system status
 ./scripts/quick_status.sh
@@ -159,6 +185,7 @@ Removes "Hey there sexy" compliment module.
 ```
 
 ### Testing Features
+
 ```bash
 # Test all tasks work
 ./scripts/test_all_tasks.sh
@@ -171,6 +198,7 @@ Removes "Hey there sexy" compliment module.
 ```
 
 ### Debugging
+
 ```bash
 # Check logs
 tail -f /tmp/assistive-backend.log
@@ -186,11 +214,13 @@ curl -s http://127.0.0.1:8000/health | jq
 ## 📝 Script Maintenance
 
 All scripts are located in `scripts/` directory and are executable:
+
 ```bash
 chmod +x scripts/*.sh
 ```
 
 To add a new script:
+
 1. Create script in `scripts/`
 2. Add shebang: `#!/bin/bash`
 3. Make executable: `chmod +x scripts/your_script.sh`
@@ -199,12 +229,14 @@ To add a new script:
 ## 🔧 Dependencies
 
 Scripts require:
+
 - `curl` - HTTP requests
 - `jq` - JSON parsing
 - `python3` - Backend runtime
 - `npm` - MagicMirror runtime
 
 Install jq if missing:
+
 ```bash
 brew install jq  # macOS
 ```

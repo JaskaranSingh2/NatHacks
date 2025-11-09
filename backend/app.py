@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, validator
 import cv2
 
 # Import task system
-from task_system import (
+from backend.task_system import (
     get_all_tasks,
     start_task,
     TaskSession,
@@ -131,6 +131,10 @@ class HUDPayload(BaseModel):
     subtitle: Optional[str] = None
     time_left_s: Optional[int] = Field(default=None, ge=0)
     hint: Optional[str] = None
+    instruction: Optional[str] = None
+    max_time_s: Optional[int] = Field(default=None, ge=0)
+    progress: Optional[float] = None
+    coach_tip: Optional[str] = None
 
 
 class OverlayMessage(BaseModel):
@@ -664,6 +668,11 @@ async def start_task_endpoint(task_id: str) -> JSONResponse:
     
     active_task_session = task_session
     
+    # Update session_state for vision pipeline overlay rendering
+    session_state.routine_id = task_id
+    session_state.step_index = 0
+    session_state.started_at = datetime.utcnow()
+    
     # Get first step
     step = task_session.get_current_step()
     if not step:
@@ -705,8 +714,13 @@ async def next_step_endpoint() -> JSONResponse:
     # Advance
     continued = active_task_session.advance_step()
     
+    # Update session_state for vision pipeline
+    session_state.step_index = active_task_session.current_step - 1  # session_state is 0-indexed
+    
     if not continued:
         # Task complete!
+        session_state.routine_id = None
+        session_state.step_index = 0
         await broadcast({"type": "overlay.clear"})
         speak_text(f"Great job! You completed {active_task_session.task.name}!")
         active_task_session = None
@@ -742,10 +756,76 @@ async def stop_task_endpoint() -> JSONResponse:
     task_name = active_task_session.task.name
     active_task_session = None
     
+    # Clear session_state
+    session_state.routine_id = None
+    session_state.step_index = 0
+    
     await broadcast({"type": "overlay.clear"})
     speak_text(f"Task stopped: {task_name}")
     
     return JSONResponse({"ok": True, "message": f"Stopped {task_name}"})
+
+# ============================================================================
+# GENAI COACHING (stub heuristics now; replace later with LLM call)
+# ============================================================================
+
+class CoachRequest(BaseModel):
+    task_id: Optional[str] = None
+    step_num: Optional[int] = None
+    user_state: Optional[Dict[str, Any]] = None
+
+class CoachResponse(BaseModel):
+    coach_tip: str
+    source: str
+
+@app.post("/genai/coach", response_model=CoachResponse)
+async def genai_coach(req: CoachRequest) -> CoachResponse:
+    global active_task_session
+    # Derive context from active session if missing
+    task_id = req.task_id or (active_task_session.task.task_id if active_task_session else None)
+    step_num = req.step_num or (active_task_session.current_step if active_task_session else None)
+    if not task_id or not step_num:
+        raise HTTPException(status_code=400, detail="No task context available")
+    task = TASKS.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Unknown task")
+    step = task.get_step(step_num)
+    if not step:
+        raise HTTPException(status_code=404, detail="Unknown step")
+    title = step.title.lower()
+    tip = None
+    if "upper" in title:
+        tip = "Tilt brush 45° toward gums; short circles help remove plaque."
+    elif "lower" in title:
+        tip = "Relax jaw slightly; reach molars with gentle circular passes."
+    elif "tongue" in title:
+        tip = "2–3 light strokes are enough; avoid triggering gag reflex."
+    elif "detangle" in title:
+        tip = "Hold section; work from ends upward to prevent breakage."
+    elif "roots" in title:
+        tip = "Long strokes from roots to tips distribute natural oils."
+    elif "fill" in title or "define" in title:
+        tip = "Feather light strokes following natural hair direction."
+    elif "massage" in title:
+        tip = "Use fingertip pads, gentle circles—avoid eye area."
+    else:
+        tip = step.instruction or "Keep a steady pace—consistency matters."
+    return CoachResponse(coach_tip=tip, source="heuristic-local")
+
+# ============================================================================
+# TTS REPLAY ENDPOINT
+# ============================================================================
+
+@app.post("/tts/replay")
+async def tts_replay() -> JSONResponse:
+    global active_task_session
+    if not active_task_session:
+        raise HTTPException(status_code=400, detail="No active task")
+    step = active_task_session.get_current_step()
+    if not step or not step.voice_prompt:
+        return JSONResponse({"ok": False, "reason": "No voice prompt for this step"})
+    speak_text(step.voice_prompt)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/tasks/current")
@@ -851,7 +931,8 @@ async def on_startup() -> None:
             camera_width=1280,
             camera_height=720,
             camera_fps=24,
-            camera_device=0
+            camera_device=0,
+            preview_fn=set_preview_frame  # Pass preview function directly
         )
         _vision_pipeline.start()
         LOGGER.info("Vision pipeline started successfully")

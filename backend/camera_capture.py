@@ -3,12 +3,10 @@ import os
 import platform
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import cv2
 import numpy as np
-
-from backend.app import health_state, set_preview_frame
 
 LOGGER = logging.getLogger("assistivecoach.camera")
 
@@ -20,12 +18,16 @@ class CameraCapture:
     the capture will synthesize frames so downstream systems can run.
     """
 
-    def __init__(self, width: int = 1280, height: int = 720, fps: int = 30, device: int = 0) -> None:
+    def __init__(self, width: int = 1280, height: int = 720, fps: int = 30, device: int = 0, health_state: Any = None, set_preview_fn: Any = None) -> None:
         # Always initialize synchronization primitives first
         self._frame_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_ts: Optional[int] = None
+
+        # Store health_state reference
+        self.health_state = health_state
+        self.set_preview_fn = set_preview_fn
 
         # Config
         env_idx = os.getenv("CAM_INDEX")
@@ -71,27 +73,27 @@ class CameraCapture:
         if opened:
             try:
                 self._configure_capture()
-                health_state.camera = "on"
-                health_state.mock_camera = False
-                health_state.camera_error = None
+                self.health_state.camera = "on"
+                self.health_state.mock_camera = False
+                self.health_state.camera_error = None
             except Exception as exc:
                 # Configuration failed; decide whether to fall back to mock
                 self.last_error = f"configure failed: {exc}"
                 if self.allow_mock:
                     self._capture = None
                     self.mock = True
-                    health_state.camera = "mock"
-                    health_state.mock_camera = True
-                    health_state.camera_error = self.last_error
+                    self.health_state.camera = "mock"
+                    self.health_state.mock_camera = True
+                    self.health_state.camera_error = self.last_error
                 else:
                     raise
         else:
             self.last_error = "unable to open device"
             if self.allow_mock:
                 self.mock = True
-                health_state.camera = "mock"
-                health_state.mock_camera = True
-                health_state.camera_error = self.last_error
+                self.health_state.camera = "mock"
+                self.health_state.mock_camera = True
+                self.health_state.camera_error = self.last_error
             else:
                 raise RuntimeError("CameraCapture: unable to open device")
 
@@ -129,9 +131,9 @@ class CameraCapture:
                     2,
                     cv2.LINE_AA,
                 )
-                health_state.camera = "mock"
-                health_state.mock_camera = True
-                health_state.camera_error = self.last_error
+                self.health_state.camera = "mock"
+                self.health_state.mock_camera = True
+                self.health_state.camera_error = self.last_error
                 gray = cv2.cvtColor(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), cv2.COLOR_BGR2GRAY)
             else:
                 ok, frame_bgr = self._capture.read()
@@ -141,26 +143,27 @@ class CameraCapture:
                     continue
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-                health_state.camera = "on"
-                health_state.mock_camera = False
-                health_state.camera_error = None
+                self.health_state.camera = "on"
+                self.health_state.mock_camera = False
+                self.health_state.camera_error = None
 
             luminance = float(gray.mean())
             lighting = "ok" if luminance > 60 else "dim"
-            health_state.lighting = lighting
+            self.health_state.lighting = lighting
 
             with self._frame_lock:
                 self._latest_frame = frame_rgb
                 self._latest_ts = timestamp_ns
                 # Preview expects BGR
-                prev_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                _, buffer = cv2.imencode(".jpg", prev_bgr)
-                set_preview_frame(bytes(buffer))
+                if self.set_preview_fn is not None:
+                    prev_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                    _, buffer = cv2.imencode(".jpg", prev_bgr)
+                    self.set_preview_fn(bytes(buffer))
 
             elapsed = time.time() - start
             current_fps = 1.0 / elapsed if elapsed > 0 else float(self.fps)
-            health_state.fps = (
-                fps_alpha * current_fps + (1 - fps_alpha) * health_state.fps
+            self.health_state.fps = (
+                fps_alpha * current_fps + (1 - fps_alpha) * self.health_state.fps
             )
             sleep_time = max(0.0, target_period - elapsed)
             time.sleep(sleep_time)
@@ -197,8 +200,8 @@ class CameraCapture:
             # Ensure teardown never crashes
             LOGGER.debug("Camera release error (ignored): %s", exc)
         finally:
-            health_state.camera = "off"
-            health_state.mock_camera = False
+            self.health_state.camera = "off"
+            self.health_state.mock_camera = False
             # keep last error for health visibility
 
     def __del__(self) -> None:  # pragma: no cover

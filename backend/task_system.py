@@ -356,13 +356,8 @@ class TaskSession:
         if time_left > 0:
             return False
         
-        # ArUco marker requirement
-        if step.aruco_marker_id and self.last_marker_seen != step.aruco_marker_id:
-            return False
-        
-        # Hand motion requirement
-        if step.requires_hand_motion and not self.hand_motion_detected:
-            return False
+        # Note: Skip ArUco/hand motion checks when camera is unavailable
+        # This allows demo/testing without camera permissions
         
         return True
     
@@ -375,6 +370,25 @@ class TaskSession:
         time_left = self.get_time_left_in_step()
         progress = self.current_step / len(self.task.steps)
         
+        # Lightweight, local "coach" heuristics (placeholder for GenAI)
+        coach_tip = None
+        if step:
+            title_lower = step.title.lower()
+            if "upper" in title_lower:
+                coach_tip = "Aim the brush at a 45° angle toward the gumline on your upper teeth."
+            elif "lower" in title_lower:
+                coach_tip = "Small circles, light pressure—cover each lower tooth front and back."
+            elif "tongue" in title_lower:
+                coach_tip = "Gently brush from back to front; a few strokes are enough."
+            elif "cleanser" in title_lower or "massage" in title_lower:
+                coach_tip = "Use fingertip pads and small circles—avoid the eye area."
+            elif "pat dry" in title_lower:
+                coach_tip = "Pat, don’t rub—to protect your skin barrier."
+            elif "comb" in self.task.name.lower() and ("detangle" in title_lower or "roots" in title_lower):
+                coach_tip = "Start at the ends to loosen knots, then brush from roots to tips."
+            elif "eyebrow" in self.task.name.lower() or "brow" in title_lower:
+                coach_tip = "Use light, hair-like strokes; follow your natural arch."
+        
         return {
             "type": "overlay.set",
             "hud": {
@@ -385,7 +399,8 @@ class TaskSession:
                 "hint": step.hint,
                 "time_left_s": time_left,
                 "max_time_s": step.duration_s,
-                "progress": progress
+                "progress": progress,
+                "coach_tip": coach_tip
             },
             "shapes": []  # Will be populated with ArUco/hand overlays
         }

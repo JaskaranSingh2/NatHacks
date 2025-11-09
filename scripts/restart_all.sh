@@ -11,9 +11,10 @@ echo ""
 
 # Kill existing processes
 echo "1️⃣ Stopping existing processes..."
-pkill -f "python3 app.py" || true
-pkill -f "npm.*MagicMirror" || true
-pkill -f "electron.*MagicMirror" || true
+pkill -9 -f "python3 app.py" || true
+pkill -9 -f "npm.*MagicMirror" || true
+pkill -9 -f "electron.*MagicMirror" || true
+lsof -ti:8000 | xargs kill -9 2>/dev/null || true
 sleep 2
 
 # Set environment
@@ -23,6 +24,7 @@ export ALLOW_WS_ORIGINS="http://localhost:8080,file://"
 echo ""
 echo "2️⃣ Starting backend (port 8000)..."
 cd "$BACKEND_DIR"
+export PYTHONPATH="${BACKEND_DIR}/..:${PYTHONPATH}"
 python3 app.py > /tmp/assistive-backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 3

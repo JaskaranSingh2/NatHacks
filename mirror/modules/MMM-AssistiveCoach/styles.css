@@ -68,14 +68,14 @@ body .assistivecoach {
 	background: rgba(15, 15, 15, 0.85);
 	backdrop-filter: blur(8px);
 	border-radius: 18px;
-	border: 1px solid rgba(255, 255, 255, 0.15);
+	pointer-events: none; /* default disabled; specific children re-enable */
 	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
 .assistivecoach .hud-card h1 {
 	font-size: clamp(48px, 6vw, 64px);
 	margin: 0 0 12px 0;
-	font-weight: 700;
+	pointer-events: auto; /* allow interaction with buttons inside card */
 }
 
 .assistivecoach .hud-step {
@@ -85,13 +85,14 @@ body .assistivecoach {
 }
 
 .assistivecoach .hud-subtitle {
-	font-size: 24px;
+	pointer-events: auto; /* clickable */
 	margin: 0 0 16px 0;
 }
 
 /* Progress Bar */
 .progress-wrap {
-	width: 100%;
+	background: rgba(15, 15, 15, 0.85);
+	pointer-events: auto; /* ensure card content clickable */
 	height: 12px;
 	border-radius: 8px;
 	background-color: rgba(255, 255, 255, 0.1);

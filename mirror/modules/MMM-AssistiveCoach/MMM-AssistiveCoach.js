@@ -80,6 +80,28 @@ Module.register("MMM-AssistiveCoach", {
 		// Render task menu if shown
 		this._renderTaskMenu(container);
 
+		// Camera preview panel (bottom-right corner)
+		const preview = document.createElement("img");
+		preview.id = "camera-preview";
+		preview.style.cssText = `
+			position: fixed;
+			bottom: 20px;
+			right: 20px;
+			width: 320px;
+			height: 240px;
+			border: 3px solid #00bcd4;
+			border-radius: 10px;
+			box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+			z-index: 9999;
+		`;
+		const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+		preview.src = `${apiBase}/preview.jpg?t=${Date.now()}`;
+		// Refresh preview every 100ms (10 FPS)
+		setInterval(() => {
+			preview.src = `${apiBase}/preview.jpg?t=${Date.now()}`;
+		}, 100);
+		container.appendChild(preview);
+
 		const overlay = document.createElementNS(
 			"http://www.w3.org/2000/svg",
 			"svg"
@@ -105,9 +127,10 @@ Module.register("MMM-AssistiveCoach", {
 	_setupKeyboardShortcuts() {
 		document.addEventListener("keydown", (e) => {
 			// Prevent default if we're handling the key
-			const isOurKey = ["t", "n", "1", "2", "3", "4"].includes(e.key.toLowerCase()) || 
-			                 (e.key.toLowerCase() === "s" && e.shiftKey);
-			
+			const isOurKey =
+				["t", "n", "1", "2", "3", "4"].includes(e.key.toLowerCase()) ||
+				(e.key.toLowerCase() === "s" && e.shiftKey);
+
 			// T = Toggle task menu
 			if (e.key.toLowerCase() === "t") {
 				e.preventDefault();
@@ -129,14 +152,21 @@ Module.register("MMM-AssistiveCoach", {
 			// Number keys 1-4 = Start specific task quickly
 			else if (["1", "2", "3", "4"].includes(e.key)) {
 				const taskIndex = Number(e.key) - 1;
-				console.log(`Key ${e.key} pressed, task index: ${taskIndex}, available tasks:`, this.state.availableTasks);
+				console.log(
+					`Key ${e.key} pressed, task index: ${taskIndex}, available tasks:`,
+					this.state.availableTasks
+				);
 				if (this.state.availableTasks && this.state.availableTasks[taskIndex]) {
 					e.preventDefault();
 					const taskId = this.state.availableTasks[taskIndex].task_id;
 					console.log(`Starting task: ${taskId}`);
 					this._startTask(taskId);
 				} else {
-					console.warn(`No task at index ${taskIndex}. Tasks loaded: ${this.state.availableTasks?.length || 0}`);
+					console.warn(
+						`No task at index ${taskIndex}. Tasks loaded: ${
+							this.state.availableTasks?.length || 0
+						}`
+					);
 				}
 			}
 		});
@@ -299,12 +329,17 @@ Module.register("MMM-AssistiveCoach", {
 			const stepEl = hud.querySelector(".hud-step");
 			const subtitleEl = hud.querySelector(".hud-subtitle");
 			const hintEl = hud.querySelector(".hud-hint");
+			const coachEl = hud.querySelector("#coach-tip");
 			const progressEl = hud.querySelector(".progress");
 
 			if (titleEl) titleEl.textContent = msg.hud.title || "";
 			if (stepEl) stepEl.textContent = msg.hud.step || "";
 			if (subtitleEl) subtitleEl.textContent = msg.hud.subtitle || "";
 			if (hintEl) hintEl.textContent = msg.hud.hint || "";
+			if (coachEl)
+				coachEl.textContent = msg.hud.coach_tip
+					? `Coach: ${msg.hud.coach_tip}`
+					: "";
 
 			if (progressEl && typeof msg.hud.time_left_s === "number") {
 				const timeLeft = Math.max(0, msg.hud.time_left_s);
@@ -394,6 +429,14 @@ Module.register("MMM-AssistiveCoach", {
 		hintEl.className = "hud-hint";
 		card.appendChild(hintEl);
 
+		// Coach tip element (optional, styled like hint but dimmer)
+		const coachEl = document.createElement("div");
+		coachEl.className = "hud-hint";
+		coachEl.style.opacity = 0.85;
+		coachEl.style.marginTop = "8px";
+		coachEl.id = "coach-tip";
+		card.appendChild(coachEl);
+
 		hud.appendChild(card);
 	},
 
@@ -417,6 +460,9 @@ Module.register("MMM-AssistiveCoach", {
 			return chip;
 		};
 
+		// Tasks menu button
+		chips.appendChild(makeChip("Tasks", "ok", () => this._toggleTaskMenu()));
+
 		// Camera chip - toggle camera on/off
 		chips.appendChild(
 			makeChip("Camera", this._statusTone(this.state.devices.camera), () =>
@@ -436,6 +482,33 @@ Module.register("MMM-AssistiveCoach", {
 			makeChip("Mic", this._statusTone(this.state.devices.mic || "ok"), () =>
 				this._toggleSetting("mic")
 			)
+		);
+
+		// Controls (Next, Stop, Replay, Coach)
+		chips.appendChild(makeChip("Next", "ok", () => this._nextStep()));
+		chips.appendChild(makeChip("Stop", "warn", () => this._stopTask()));
+		chips.appendChild(
+			makeChip("Replay", "ok", () => {
+				const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+				fetch(`${apiBase}/tts/replay`, { method: "POST" }).catch(() => {});
+			})
+		);
+		chips.appendChild(
+			makeChip("Coach", "ok", () => {
+				const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+				fetch(`${apiBase}/genai/coach`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({}),
+				})
+					.then((r) => r.json())
+					.then((data) => {
+						this.state.hud = this.state.hud || {};
+						this.state.hud.coach_tip = data.coach_tip;
+						this.updateDom(0);
+					})
+					.catch(() => {});
+			})
 		);
 
 		if (!this.socketConnected) {
