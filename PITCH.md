@@ -2,7 +2,7 @@
 
 ## 1. The Problem
 
-Neurodivergent kids and patients working on daily living skills (e.g., brushing teeth) often lack **timely, contextual, and adaptive guidance**. Caregivers cannot always be present; generic reminder timers or static posters fail to reinforce technique quality (coverage, duration, sequence) and can overstimulate with unnecessary motion. Existing “smart mirror” concepts focus on vanity metrics, not *skill acquisition*, *accessibility*, or *low-latency embodied feedback*.
+Neurodivergent kids and patients working on daily living skills (e.g., brushing teeth) often lack **timely, contextual, and adaptive guidance**. Caregivers cannot always be present; generic reminder timers or static posters fail to reinforce technique quality (coverage, duration, sequence) and can overstimulate with unnecessary motion. Existing “smart mirror” concepts focus on vanity metrics, not _skill acquisition_, _accessibility_, or _low-latency embodied feedback_.
 
 ## 2. The Solution
 
@@ -10,14 +10,14 @@ Assistive Coach is a **privacy-first, on-device vision coach** with optional bur
 
 ## 3. Core Value Props
 
-| Pillar | What It Delivers |
-| ------ | ---------------- |
-| Low Latency | <150 ms camera → overlay path with debounced 15 Hz UI updates; adaptive stride + dynamic downscale maintain responsiveness on constrained hardware. |
-| Accessibility | Reduced-motion mode (pref + runtime toggle), high-contrast HUD, keyboard demo triggers, fallback TTS chain (system → espeak → pyttsx3). |
-| Reliability | Non-blocking cloud FACE_DETECTION assist (breaker + RPS gating), camera watchdog, synthetic fallback if camera init fails. |
-| Guidance Quality | ArUco-based tool anchoring (2D now / pose when calibrated); auto rings around mouth/tool; HUD routine progression with time + hints. |
-| Developer Ergonomics | Hot-reload friendly FastAPI, rich /health JSON, CSV latency logs, portable scripts (python/python3), viewer file:// WS fallback. |
-| Extensibility | Pluggable detectors (face / hands / aruco / pose) via settings; queue-based broadcast decouples producers & clients. |
+| Pillar               | What It Delivers                                                                                                                                    |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Low Latency          | <150 ms camera → overlay path with debounced 15 Hz UI updates; adaptive stride + dynamic downscale maintain responsiveness on constrained hardware. |
+| Accessibility        | Reduced-motion mode (pref + runtime toggle), high-contrast HUD, keyboard demo triggers, fallback TTS chain (system → espeak → pyttsx3).             |
+| Reliability          | Non-blocking cloud FACE_DETECTION assist (breaker + RPS gating), camera watchdog, synthetic fallback if camera init fails.                          |
+| Guidance Quality     | ArUco-based tool anchoring (2D now / pose when calibrated); auto rings around mouth/tool; HUD routine progression with time + hints.                |
+| Developer Ergonomics | Hot-reload friendly FastAPI, rich /health JSON, CSV latency logs, portable scripts (python/python3), viewer file:// WS fallback.                    |
+| Extensibility        | Pluggable detectors (face / hands / aruco / pose) via settings; queue-based broadcast decouples producers & clients.                                |
 
 ## 4. Feature Highlights
 
@@ -56,7 +56,7 @@ Assistive Coach is a **privacy-first, on-device vision coach** with optional bur
             +----------------------+        +-----------------------+
 Camera ---> |  Capture Thread      |  --->  |  Vision Pipeline Loop |--+----> queue_broadcast()
             +----------+-----------+        +----------+------------+  |         (async)
-                       |                             |               | 
+                       |                             |               |
                        v                             v               |
                 Preprocess / Scale         MediaPipe / ArUco / Cloud  |
                        |                             |               |
@@ -72,18 +72,18 @@ Camera ---> |  Capture Thread      |  --->  |  Vision Pipeline Loop |--+----> qu
 
 ## 6. Tech Stack
 
-| Layer | Tech |
-| ----- | ---- |
-| Backend API | FastAPI (Python) + Uvicorn |
-| Vision / CV | OpenCV (ArUco, capture), MediaPipe (Face Mesh, Hands) |
-| Optional Assist | Google Cloud Vision (non-blocking FACE_DETECTION) |
-| Messaging | In-process asyncio queue → WebSocket broadcast |
-| Overlay Protocol | JSON messages (status / overlay / tts / safety) |
-| Frontend Dev Viewer | Vanilla HTML/JS/SVG (file:// friendly) |
-| Mirror Integration | MagicMirror² custom module |
-| Accessibility | Reduced-motion CSS strategy, multi-tier TTS chain |
-| Performance Telemetry | CSV logging + /health JSON + adaptive throttling |
-| Tooling | Calibration + ArUco generator (API version resilient) |
+| Layer                 | Tech                                                  |
+| --------------------- | ----------------------------------------------------- |
+| Backend API           | FastAPI (Python) + Uvicorn                            |
+| Vision / CV           | OpenCV (ArUco, capture), MediaPipe (Face Mesh, Hands) |
+| Optional Assist       | Google Cloud Vision (non-blocking FACE_DETECTION)     |
+| Messaging             | In-process asyncio queue → WebSocket broadcast        |
+| Overlay Protocol      | JSON messages (status / overlay / tts / safety)       |
+| Frontend Dev Viewer   | Vanilla HTML/JS/SVG (file:// friendly)                |
+| Mirror Integration    | MagicMirror² custom module                            |
+| Accessibility         | Reduced-motion CSS strategy, multi-tier TTS chain     |
+| Performance Telemetry | CSV logging + /health JSON + adaptive throttling      |
+| Tooling               | Calibration + ArUco generator (API version resilient) |
 
 ## 7. Performance Characteristics
 
@@ -104,11 +104,11 @@ Camera ---> |  Capture Thread      |  --->  |  Vision Pipeline Loop |--+----> qu
 
 ## 10. Extensibility Roadmap
 
-| Near-Term | Mid-Term | Longer-Term |
-| --------- | -------- | ----------- |
-| Pose-guided brushing coverage scoring | Local CLIP-style hint ranking | Federated personalization (opt-in) |
-| Multi-tool routines (floss, rinse) | Hand pose gesture classifier | Adaptive reward / gamification engine |
-| Offline markerless tool tracking | Local tiny ASR for voice hints | Edge GPU acceleration (NPU / TPU) |
+| Near-Term                             | Mid-Term                       | Longer-Term                           |
+| ------------------------------------- | ------------------------------ | ------------------------------------- |
+| Pose-guided brushing coverage scoring | Local CLIP-style hint ranking  | Federated personalization (opt-in)    |
+| Multi-tool routines (floss, rinse)    | Hand pose gesture classifier   | Adaptive reward / gamification engine |
+| Offline markerless tool tracking      | Local tiny ASR for voice hints | Edge GPU acceleration (NPU / TPU)     |
 
 ## 11. Why We Win
 
