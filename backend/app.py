@@ -4,6 +4,7 @@ import importlib.util
 import json
 import logging
 import subprocess
+import platform
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import lru_cache
@@ -153,6 +154,9 @@ class HealthState(BaseModel):
     cloud_breaker_open: bool = False
     cloud_latency_ms: float = 0.0
     cloud_last_ok_ns: Optional[int] = None
+    # Hotfix additions
+    mock_camera: bool = False
+    camera_error: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -162,6 +166,8 @@ class HealthResponse(BaseModel):
     latency_ms: float
     vision_state: Optional[Dict[str, Any]] = None
     cloud: Optional[Dict[str, Any]] = None
+    mock_camera: bool
+    camera_error: Optional[str] = None
 
 
 class SettingsState(BaseModel):
@@ -327,14 +333,47 @@ def _speak_pyttsx(text: str) -> None:
     engine.runAndWait()
 
 
+def _speak_system(text: str) -> bool:
+    """Platform-aware TTS; returns True if spoken, False otherwise."""
+    try:
+        import shutil as _sh
+    except ImportError:
+        _sh = None  # type: ignore
+    sysname = platform.system()
+    if sysname == "Darwin":
+        try:
+            subprocess.run(["say", text], check=True)
+            return True
+        except Exception as exc:  # pragma: no cover
+            LOGGER.warning("macOS say failed: %s", exc)
+            return False
+    if sysname == "Linux" and _sh and _sh.which("espeak-ng"):
+        try:
+            subprocess.run(["espeak-ng", text], check=True)
+            return True
+        except Exception as exc:  # pragma: no cover
+            LOGGER.warning("espeak-ng failed: %s", exc)
+            return False
+    return False
+
+
 def speak_text(text: str) -> None:
-    if not _speech_engine:
-        LOGGER.warning("No speech engine available; skipping TTS")
+    # Try system first
+    if _speak_system(text):
         return
+    # Fallback chain
     if _speech_engine == "pyttsx3":
-        _speak_pyttsx(text)
+        try:
+            _speak_pyttsx(text)
+        except Exception as exc:  # pragma: no cover
+            LOGGER.warning("pyttsx3 fallback failed: %s", exc)
+    elif _speech_engine:
+        try:
+            _speak_espeak(text)
+        except Exception as exc:  # pragma: no cover
+            LOGGER.warning("espeak-ng fallback failed: %s", exc)
     else:
-        _speak_espeak(text)
+        LOGGER.warning("No TTS engine available; skipping")
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -364,6 +403,8 @@ async def get_health() -> HealthResponse:
         latency_ms=health_state.latency_ms,
         vision_state=vision_state,
         cloud=cloud_state,
+        mock_camera=health_state.mock_camera,
+        camera_error=health_state.camera_error,
     )
 
 
@@ -431,11 +472,22 @@ async def prev_step() -> JSONResponse:
 
 
 @app.post("/overlay")
-async def post_overlay(request: OverlayRequest) -> JSONResponse:
-    message = request.message.dict(exclude_none=True)
-    await broadcast(message)
-    LOGGER.info("Broadcast overlay message %s", message.get("type"))
-    return JSONResponse({"status": "ok"})
+async def post_overlay(raw: Dict[str, Any]) -> JSONResponse:
+    # Accept either {"message": {...}} or raw overlay payload
+    if "message" in raw and isinstance(raw["message"], dict):
+        payload = raw["message"]
+    else:
+        payload = raw
+    if "type" not in payload:
+        # Wrap arbitrary payload
+        payload = {
+            "type": "overlay.set",
+            "shapes": [],
+            "hud": payload,
+        }
+    await broadcast(payload)
+    LOGGER.info("Broadcast overlay message %s", payload.get("type"))
+    return JSONResponse({"ok": True})
 
 
 @app.post("/tts")
@@ -532,7 +584,27 @@ async def on_startup() -> None:
         LOGGER.info("Vision pipeline started successfully")
     except Exception as exc:
         LOGGER.error("Failed to start vision pipeline: %s", exc)
-        _vision_pipeline = None
+        # Attempt synthetic fallback so overlays & health still work
+        try:
+            from backend.vision_pipeline import VisionPipeline
+            _vision_pipeline = VisionPipeline(
+                broadcast_fn=queue_broadcast,
+                settings=settings_state,
+                session=session_state,
+                health=health_state,
+                camera_width=1280,
+                camera_height=720,
+                camera_fps=24,
+                camera_device=0,
+                camera_enabled=False,
+            )
+            _vision_pipeline.start()
+            LOGGER.info("Vision pipeline started in synthetic (mock) mode")
+            health_state.camera = "mock"
+            health_state.mock_camera = True
+        except Exception as inner:
+            LOGGER.error("Synthetic fallback failed: %s", inner)
+            _vision_pipeline = None
 
 
 if __name__ == "__main__":

@@ -134,6 +134,8 @@ class VisionPipeline:
         self._aruco_state_since = {}
         self._aruco_debounce_s = 0.25
         self._aruco_last_detection_ns = 0
+    self._aruco_last_meta: Optional[Dict[str, Any]] = None
+    self._aruco_pose_announced = False
         
         # Ensure logs directory exists
         LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -252,7 +254,16 @@ class VisionPipeline:
                 try:
                     from backend.ar_overlay import detect_aruco_anchors
                     pose_enabled = bool(getattr(self.settings, "pose", True))
-                    ar_anchors = detect_aruco_anchors(frame_rgb, pose_enabled=pose_enabled)
+                    ar_anchors, meta = detect_aruco_anchors(frame_rgb, pose_enabled=pose_enabled)
+                    self._aruco_last_meta = meta
+                    # Announce pose availability once on startup
+                    if not self._aruco_pose_announced and meta.get("pose_enabled"):
+                        LOGGER.info(
+                            "ArUco pose availability: %s (error=%s)",
+                            "enabled" if meta.get("pose_available") else "unavailable",
+                            meta.get("intrinsics_error")
+                        )
+                        self._aruco_pose_announced = True
                 except (RuntimeError, ImportError) as exc:
                     LOGGER.debug("ArUco detection unavailable: %s", exc)
 
@@ -290,6 +301,14 @@ class VisionPipeline:
                 "shapes": overlay_shapes,
                 "hud": hud,
             }
+            if self._aruco_last_meta:
+                message["detectors"] = {
+                    "aruco": True,
+                    "pose_enabled": bool(self._aruco_last_meta.get("pose_enabled")),
+                    "pose_available": bool(self._aruco_last_meta.get("pose_available")),
+                }
+                if self._aruco_last_meta.get("intrinsics_error"):
+                    message["intrinsics_error"] = self._aruco_last_meta.get("intrinsics_error")
             
             # Broadcast overlay
             self.broadcast_fn(message)

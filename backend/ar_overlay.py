@@ -10,21 +10,48 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import logging
+
+LOGGER = logging.getLogger("assistivecoach.aruco")
 
 
-# --- Camera intrinsics loading -------------------------------------------------
+# --- Camera intrinsics loading (single-attempt cache) -------------------------
 
-def load_camera_intrinsics(path: str = "config/camera_intrinsics.yml") -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+_INTRINSICS_TRIED = False
+_INTRINSICS_OK = False
+_K: Optional[np.ndarray] = None
+_DIST: Optional[np.ndarray] = None
+_INTRINSICS_ERR: Optional[str] = None
+_POSE_WARNED = False
+
+
+def load_camera_intrinsics(path: str = "config/camera_intrinsics.yml") -> Tuple[Optional[np.ndarray], Optional[np.ndarray], bool, Optional[str]]:
+    global _INTRINSICS_TRIED, _INTRINSICS_OK, _K, _DIST, _INTRINSICS_ERR
+    if _INTRINSICS_TRIED:
+        return _K, _DIST, _INTRINSICS_OK, _INTRINSICS_ERR
     fs = cv2.FileStorage(path, cv2.FILE_STORAGE_READ)
     try:
         if not fs.isOpened():
-            return None, None
+            _INTRINSICS_OK = False
+            _INTRINSICS_ERR = f"unable to open: {path}"
+            return None, None, _INTRINSICS_OK, _INTRINSICS_ERR
         K = fs.getNode("K").mat()
         dist = fs.getNode("dist").mat()
         if K is None or dist is None:
-            return None, None
-        return K.astype(np.float64), dist.astype(np.float64)
+            _INTRINSICS_OK = False
+            _INTRINSICS_ERR = "missing K/dist nodes"
+            return None, None, _INTRINSICS_OK, _INTRINSICS_ERR
+        _K = K.astype(np.float64)
+        _DIST = dist.astype(np.float64)
+        _INTRINSICS_OK = True
+        _INTRINSICS_ERR = None
+        return _K, _DIST, _INTRINSICS_OK, _INTRINSICS_ERR
+    except Exception as exc:  # pragma: no cover
+        _INTRINSICS_OK = False
+        _INTRINSICS_ERR = str(exc)
+        return None, None, _INTRINSICS_OK, _INTRINSICS_ERR
     finally:
+        _INTRINSICS_TRIED = True
         fs.release()
 
 
@@ -150,8 +177,8 @@ _prev_angles: Dict[int, Tuple[float, float, float]] = {}
 _last_ts = 0.0
 _min_interval_s = 0.065  # ~15 Hz
 _last_anchors: List[Dict[str, Any]] = []
-_K: Optional[np.ndarray] = None
-_dist: Optional[np.ndarray] = None
+_k_runtime: Optional[np.ndarray] = None
+_dist_runtime: Optional[np.ndarray] = None
 
 
 def _smooth_pair(key: int, value: Tuple[float, float]) -> Tuple[float, float]:
@@ -177,16 +204,31 @@ def _smooth_angles(key: int, value: Tuple[float, float, float]) -> Tuple[float, 
     return _prev_angles[key]
 
 
-def detect_aruco_anchors(frame_rgb: np.ndarray, pose_enabled: bool = True, dict_name: str = "DICT_5X5_250") -> List[Dict[str, Any]]:
+def detect_aruco_anchors(
+    frame_rgb: np.ndarray,
+    pose_enabled: bool = True,
+    intrinsics_path: str = "config/camera_intrinsics.yml",
+    marker_size_m: float = 0.032,
+    dict_name: str = "DICT_5X5_250",
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Convenience wrapper used by the pipeline.
     - Subsamples detection rate (~15 Hz) and returns last anchors in between calls.
     - Applies EMA to center and (if present) Euler angles.
     - Adds fields used by the pipeline overlay logic: {"aruco_id", "center_px", optionally yaw/pitch/roll}.
+    Returns: (anchors, meta)
+      meta = {"pose_enabled": bool, "pose_available": bool, "intrinsics_error": str|None}
     """
-    global _last_ts, _last_anchors, _K, _dist
+    global _last_ts, _last_anchors, _k_runtime, _dist_runtime, _POSE_WARNED
     now = time.time()
     if (now - _last_ts) < _min_interval_s and _last_anchors:
-        return _last_anchors
+        # Recompute meta without re-detecting
+        _, _, ok, err = load_camera_intrinsics(intrinsics_path)
+        meta = {
+            "pose_enabled": bool(pose_enabled),
+            "pose_available": bool(pose_enabled and ok),
+            "intrinsics_error": (None if ok else err),
+        }
+        return _last_anchors, meta
     _last_ts = now
 
     try:
@@ -199,13 +241,18 @@ def detect_aruco_anchors(frame_rgb: np.ndarray, pose_enabled: bool = True, dict_
     except ImportError:
         # aruco not available; surface empty list (pipeline handles gracefully)
         _last_anchors = []
-        return _last_anchors
-
-    if _K is None or _dist is None:
-        _K, _dist = load_camera_intrinsics()
-
-    if pose_enabled and _K is not None and _dist is not None:
-        markers = estimate_pose(markers, _K, _dist)
+        meta = {"pose_enabled": bool(pose_enabled), "pose_available": False, "intrinsics_error": "aruco not available"}
+        return _last_anchors, meta
+    # Try loading intrinsics once (cached at module level)
+    k, dist, ok, err = load_camera_intrinsics(intrinsics_path)
+    if ok:
+        _k_runtime, _dist_runtime = k, dist
+    pose_available = bool(pose_enabled and ok)
+    if pose_enabled and not ok and not _POSE_WARNED:
+        LOGGER.warning("Pose requested but intrinsics unavailable; proceeding in 2D mode: %s", err)
+        _POSE_WARNED = True
+    if pose_available and _k_runtime is not None and _dist_runtime is not None:
+        markers = estimate_pose(markers, _k_runtime, _dist_runtime, marker_size_m=marker_size_m)
 
     anchors: List[Dict[str, Any]] = []
     for m in markers:
@@ -227,4 +274,9 @@ def detect_aruco_anchors(frame_rgb: np.ndarray, pose_enabled: bool = True, dict_
         anchors.append(anchor)
 
     _last_anchors = anchors
-    return anchors
+    meta = {
+        "pose_enabled": bool(pose_enabled),
+        "pose_available": pose_available,
+        "intrinsics_error": (None if pose_available else err),
+    }
+    return anchors, meta

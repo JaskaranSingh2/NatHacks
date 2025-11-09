@@ -1,3 +1,5 @@
+import os
+import platform
 import threading
 import time
 from typing import Optional, Tuple
@@ -9,25 +11,93 @@ from backend.app import health_state, set_preview_frame
 
 
 class CameraCapture:
-    """Background camera reader keeping a preview buffer and lighting metric."""
+    """Background camera reader keeping a preview buffer and lighting metric.
+
+    If a physical camera can't be opened and ALLOW_MOCK is true (default),
+    the capture will synthesize frames so downstream systems can run.
+    """
 
     def __init__(self, width: int = 1280, height: int = 720, fps: int = 30, device: int = 0) -> None:
+        # Always initialize synchronization primitives first
+        self._frame_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._latest_frame: Optional[np.ndarray] = None
+        self._latest_ts: Optional[int] = None
+
+        # Config
+        env_idx = os.getenv("CAM_INDEX")
+        try:
+            env_idx_val = int(env_idx) if env_idx is not None else device
+        except ValueError:
+            env_idx_val = device
         self.width = width
         self.height = height
         self.fps = fps
-        self.device = device
-        api_preference = cv2.CAP_V4L2 if hasattr(cv2, "CAP_V4L2") else cv2.CAP_ANY
-        self._capture = cv2.VideoCapture(self.device, api_preference)
-        self._configure_capture()
-        self._frame_lock = threading.Lock()
-        self._latest_frame: Optional[np.ndarray] = None
-        self._latest_ts: Optional[int] = None
-        self._stop_event = threading.Event()
+        self.device = env_idx_val
+        self.allow_mock = str(os.getenv("ALLOW_MOCK", "true")).lower() not in {"0", "false", "no"}
+        self.mock = False
+        self.last_error: Optional[str] = None
+
+        # Try opening with a matrix of backends based on platform
+        self._capture = None  # type: ignore[assignment]
+        opened = False
+        backend_candidates = []
+        sysname = platform.system()
+        if sysname == "Darwin":
+            if hasattr(cv2, "CAP_AVFOUNDATION"):
+                backend_candidates.append(cv2.CAP_AVFOUNDATION)
+        elif sysname == "Linux":
+            if hasattr(cv2, "CAP_V4L2"):
+                backend_candidates.append(cv2.CAP_V4L2)
+        # Always include CAP_ANY fallback
+        backend_candidates.append(getattr(cv2, "CAP_ANY", 0))
+
+        for backend in backend_candidates:
+            try:
+                cap = cv2.VideoCapture(self.device, backend)
+                if cap is not None and cap.isOpened():
+                    self._capture = cap
+                    opened = True
+                    break
+                if cap is not None:
+                    cap.release()
+            except Exception:
+                # Continue trying other backends
+                pass
+
+        if opened:
+            try:
+                self._configure_capture()
+                health_state.camera = "on"
+                health_state.mock_camera = False
+                health_state.camera_error = None
+            except Exception as exc:
+                # Configuration failed; decide whether to fall back to mock
+                self.last_error = f"configure failed: {exc}"
+                if self.allow_mock:
+                    self._capture = None
+                    self.mock = True
+                    health_state.camera = "mock"
+                    health_state.mock_camera = True
+                    health_state.camera_error = self.last_error
+                else:
+                    raise
+        else:
+            self.last_error = "unable to open device"
+            if self.allow_mock:
+                self.mock = True
+                health_state.camera = "mock"
+                health_state.mock_camera = True
+                health_state.camera_error = self.last_error
+            else:
+                raise RuntimeError("CameraCapture: unable to open device")
+
+        # Start thread
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def _configure_capture(self) -> None:
-        if not self._capture.isOpened():
+        if self._capture is None or not self._capture.isOpened():
             raise RuntimeError("CameraCapture: unable to open device")
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
@@ -38,24 +108,50 @@ class CameraCapture:
         fps_alpha = 0.2
         while not self._stop_event.is_set():
             start = time.time()
-            ok, frame_bgr = self._capture.read()
             timestamp_ns = time.time_ns()
-            if not ok:
-                time.sleep(0.05)
-                continue
+            if self.mock or self._capture is None:
+                # Synthetic frame with moving dot and timestamp
+                frame_rgb = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                t = time.time()
+                x = int((0.5 + 0.4 * np.sin(t)) * self.width)
+                y = int((0.5 + 0.4 * np.cos(t)) * self.height)
+                cv2.circle(frame_rgb, (x, y), 20, (0, 255, 0), -1)
+                cv2.putText(
+                    frame_rgb,
+                    time.strftime("%H:%M:%S"),
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                health_state.camera = "mock"
+                health_state.mock_camera = True
+                health_state.camera_error = self.last_error
+                gray = cv2.cvtColor(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), cv2.COLOR_BGR2GRAY)
+            else:
+                ok, frame_bgr = self._capture.read()
+                if not ok:
+                    # brief pause then try again
+                    time.sleep(0.05)
+                    continue
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+                health_state.camera = "on"
+                health_state.mock_camera = False
+                health_state.camera_error = None
 
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
             luminance = float(gray.mean())
             lighting = "ok" if luminance > 60 else "dim"
             health_state.lighting = lighting
-            health_state.camera = "on"
 
             with self._frame_lock:
                 self._latest_frame = frame_rgb
                 self._latest_ts = timestamp_ns
-                _, buffer = cv2.imencode(".jpg", frame_bgr)
-                # Set preview for FastAPI endpoint.
+                # Preview expects BGR
+                prev_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                _, buffer = cv2.imencode(".jpg", prev_bgr)
                 set_preview_frame(bytes(buffer))
 
             elapsed = time.time() - start
@@ -85,12 +181,25 @@ class CameraCapture:
             return bytes(buffer)
 
     def close(self) -> None:
-        self._stop_event.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=1.0)
-        if self._capture.isOpened():
-            self._capture.release()
-        health_state.camera = "off"
+        try:
+            if hasattr(self, "_stop_event"):
+                self._stop_event.set()
+            if hasattr(self, "_thread") and getattr(self, "_thread", None) is not None:
+                if self._thread.is_alive():
+                    self._thread.join(timeout=1.0)
+            cap = getattr(self, "_capture", None)
+            if cap is not None and hasattr(cap, "isOpened") and cap.isOpened():
+                cap.release()
+        except Exception:
+            # Ensure teardown never crashes
+            pass
+        finally:
+            health_state.camera = "off"
+            health_state.mock_camera = False
+            # keep last error for health visibility
 
     def __del__(self) -> None:  # pragma: no cover
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
