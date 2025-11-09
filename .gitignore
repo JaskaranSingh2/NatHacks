@@ -60,3 +60,6 @@ htmlcov/
 # Node (if present for UI)
 node_modules/
 *.log
+
+# Project logs
+logs/latency.csv
