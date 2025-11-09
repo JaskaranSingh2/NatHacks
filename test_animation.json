@@ -3,7 +3,12 @@
     "shapes": [
         {
             "kind": "ring",
-            "anchor": { "pixel": { "x": 640, "y": 360 } },
+            "anchor": {
+                "pixel": {
+                    "x": 640,
+                    "y": 360
+                }
+            },
             "radius_px": 120,
             "accent": "info"
         }
