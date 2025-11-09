@@ -38,7 +38,7 @@ Module.register("MMM-AssistiveCoach", {
 		this.rafScheduled = false;
 		this._setupDomReadyListener();
 		this._setupKeyboardShortcuts();
-		this._loadAvailableTasks();  // Load tasks from backend
+		this._loadAvailableTasks(); // Load tasks from backend
 		this.sendSocketNotification("MMM_ASSISTIVECOACH_INIT", {
 			wsUrl: this.config.wsUrl,
 			apiBase: this.config.apiBase, // Pass apiBase to node_helper
@@ -104,23 +104,39 @@ Module.register("MMM-AssistiveCoach", {
 
 	_setupKeyboardShortcuts() {
 		document.addEventListener("keydown", (e) => {
+			// Prevent default if we're handling the key
+			const isOurKey = ["t", "n", "1", "2", "3", "4"].includes(e.key.toLowerCase()) || 
+			                 (e.key.toLowerCase() === "s" && e.shiftKey);
+			
 			// T = Toggle task menu
 			if (e.key.toLowerCase() === "t") {
+				e.preventDefault();
 				this._toggleTaskMenu();
+				console.log("Toggling task menu");
 			}
 			// N = Next step (in active task)
 			else if (e.key.toLowerCase() === "n") {
+				e.preventDefault();
 				this._nextStep();
+				console.log("Next step");
 			}
 			// S = Stop current task
 			else if (e.key.toLowerCase() === "s" && e.shiftKey) {
+				e.preventDefault();
 				this._stopTask();
+				console.log("Stopping task");
 			}
 			// Number keys 1-4 = Start specific task quickly
-			else if (["1", "2", "3", "4"].includes(e.key) && !this.state.showTaskMenu) {
+			else if (["1", "2", "3", "4"].includes(e.key)) {
 				const taskIndex = Number(e.key) - 1;
-				if (this.state.availableTasks[taskIndex]) {
-					this._startTask(this.state.availableTasks[taskIndex].task_id);
+				console.log(`Key ${e.key} pressed, task index: ${taskIndex}, available tasks:`, this.state.availableTasks);
+				if (this.state.availableTasks && this.state.availableTasks[taskIndex]) {
+					e.preventDefault();
+					const taskId = this.state.availableTasks[taskIndex].task_id;
+					console.log(`Starting task: ${taskId}`);
+					this._startTask(taskId);
+				} else {
+					console.warn(`No task at index ${taskIndex}. Tasks loaded: ${this.state.availableTasks?.length || 0}`);
 				}
 			}
 		});
@@ -731,7 +747,9 @@ Module.register("MMM-AssistiveCoach", {
 
 			const meta = document.createElement("div");
 			meta.className = "task-meta";
-			meta.textContent = `${task.num_steps} steps · ${Math.ceil(task.duration_s / 60)} min`;
+			meta.textContent = `${task.num_steps} steps · ${Math.ceil(
+				task.duration_s / 60
+			)} min`;
 			info.appendChild(meta);
 
 			taskCard.appendChild(info);

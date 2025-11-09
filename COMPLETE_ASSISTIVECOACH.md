@@ -3,12 +3,14 @@
 ## ✅ What's Included
 
 ### Real ADL Tasks
+
 - 🪥 **Brush Teeth** (6 steps, 120s)
-- 🧼 **Wash Face** (5 steps, 90s)  
+- 🧼 **Wash Face** (5 steps, 90s)
 - 💇 **Comb Hair** (4 steps, 60s)
 - 👕 **Put On Shirt** (5 steps, 45s)
 
 ### Features
+
 ✅ Step-by-step voice guidance (TTS)
 ✅ Visual HUD with progress bars
 ✅ ArUco marker detection  
@@ -23,12 +25,14 @@
 ## 🚀 START EVERYTHING
 
 ### Quick Start
+
 ```bash
 cd ~/Documents/Engineering/Coding/NatHacks
 ./scripts/restart_all.sh
 ```
 
 This will:
+
 1. Stop existing processes
 2. Start backend on port 8000
 3. Start MagicMirror on port 8080
@@ -39,14 +43,16 @@ This will:
 ## 🎮 CONTROLS (In MagicMirror Window)
 
 ### Task Controls
-| Key | Action |
-|-----|--------|
-| **T** | Toggle task menu |
-| **1-4** | Quick start task by number |
-| **N** | Next step (advance current task) |
-| **Shift+S** | Stop current task |
+
+| Key         | Action                           |
+| ----------- | -------------------------------- |
+| **T**       | Toggle task menu                 |
+| **1-4**     | Quick start task by number       |
+| **N**       | Next step (advance current task) |
+| **Shift+S** | Stop current task                |
 
 ### Visual Feedback
+
 - **Camera chip** - Click to toggle vision on/off
 - **Hover chips** - See scale/glow effect
 - **HUD card** - Shows current step, time, hints
@@ -57,11 +63,13 @@ This will:
 ## 🎬 DEMO WORKFLOW
 
 ### Option 1: Automated Demo
+
 ```bash
 ./scripts/demo_complete.sh
 ```
 
 This cycles through:
+
 1. Lists all tasks
 2. Starts "Brush Teeth"
 3. Advances through steps
@@ -71,18 +79,21 @@ This cycles through:
 ### Option 2: Manual Demo
 
 **Step 1: Start Backend**
+
 ```bash
 cd ~/Documents/Engineering/Coding/NatHacks/backend
 python3 app.py
 ```
 
 **Step 2: Start MagicMirror**
+
 ```bash
 cd ~/MagicMirror
 npm start
 ```
 
 **Step 3: In MagicMirror**
+
 1. Press **T** to show task menu
 2. Click a task or press **1-4**
 3. Follow voice instructions
@@ -94,6 +105,7 @@ npm start
 ## 📋 TASK DEFINITIONS
 
 ### 🪥 Brush Teeth
+
 1. Prepare Toothbrush (15s) - Marker #1
 2. Brush Upper Teeth (30s) - Marker #2, requires hand motion
 3. Brush Lower Teeth (30s) - Marker #3, requires hand motion
@@ -102,6 +114,7 @@ npm start
 6. Clean Up (15s) - Marker #1
 
 ### 🧼 Wash Face
+
 1. Wet Face (10s) - Marker #1
 2. Apply Cleanser (10s) - Marker #2
 3. Massage Face (30s) - Marker #3, requires hand motion
@@ -109,12 +122,14 @@ npm start
 5. Pat Dry (10s) - Marker #4
 
 ### 💇 Comb Hair
+
 1. Section Hair (10s) - Marker #1
 2. Detangle Ends (20s) - Marker #2, requires hand motion
 3. Brush from Roots (20s) - Marker #3, requires hand motion
 4. Style (10s) - Marker #4
 
 ### 👕 Put On Shirt
+
 1. Hold Shirt (5s) - Marker #1
 2. Head Through (10s) - Marker #2
 3. Right Arm (10s) - Marker #3
@@ -126,6 +141,7 @@ npm start
 ## 🔧 API ENDPOINTS
 
 ### Task Management
+
 ```bash
 # List all tasks
 GET /tasks
@@ -144,6 +160,7 @@ GET /tasks/current
 ```
 
 ### Examples
+
 ```bash
 # Start tooth brushing
 curl -X POST http://127.0.0.1:8000/tasks/brush_teeth/start
@@ -163,6 +180,7 @@ curl -X POST http://127.0.0.1:8000/tasks/stop
 ## 🎤 VOICE GUIDANCE
 
 Each step has a voice prompt that plays automatically:
+
 - **Step 1**: "Wet your toothbrush and apply a pea-sized amount of toothpaste"
 - **Step 2**: "Brush your upper teeth using gentle circular motions"
 - **Step 3**: "Now brush your lower teeth, including the back molars"
@@ -175,6 +193,7 @@ Uses macOS `say` command (built-in TTS).
 ## 🎨 VISUAL OVERLAYS
 
 ### HUD Card (Top-Left)
+
 ```
 ┌─────────────────────────────┐
 │ Brush Teeth                 │ ← Task name
@@ -186,6 +205,7 @@ Uses macOS `say` command (built-in TTS).
 ```
 
 ### Overlays
+
 - **Blue ring** - ArUco marker position
 - **Green arrow** - Hand guidance
 - **Yellow badge** - Step indicators
@@ -195,6 +215,7 @@ Uses macOS `say` command (built-in TTS).
 ## 🐛 TROUBLESHOOTING
 
 ### Backend Won't Start
+
 ```bash
 # Check if port 8000 is in use
 lsof -i :8000
@@ -208,6 +229,7 @@ python3 app.py
 ```
 
 ### MagicMirror Shows Compliments
+
 ```bash
 # Disable compliments module
 ./scripts/disable_compliments.sh
@@ -217,16 +239,19 @@ python3 app.py
 ```
 
 ### Task Menu Won't Show
+
 - Press **T** key (make sure MM window has focus)
 - Check browser console for errors (F12)
 - Verify backend is running: `curl http://127.0.0.1:8000/tasks`
 
 ### No Voice
+
 - macOS: `say` command should work by default
 - Test: `say "Hello world"`
 - Check System Settings → Sound → Output
 
 ### Camera Not Working
+
 ```bash
 # Enable mock camera for testing
 curl -X POST http://127.0.0.1:8000/settings \
@@ -239,16 +264,19 @@ curl -X POST http://127.0.0.1:8000/settings \
 ## 📊 TESTING
 
 ### Quick Health Check
+
 ```bash
 ./scripts/quick_check.sh
 ```
 
 ### Full Test Suite
+
 ```bash
 ./scripts/test_magicmirror.sh
 ```
 
 ### Complete Demo
+
 ```bash
 ./scripts/demo_complete.sh
 ```
@@ -258,6 +286,7 @@ curl -X POST http://127.0.0.1:8000/settings \
 ## 🎯 DEMO CHECKLIST
 
 Before your demo:
+
 - [ ] Backend running on port 8000
 - [ ] MagicMirror running on port 8080
 - [ ] Task menu appears when pressing T
@@ -268,6 +297,7 @@ Before your demo:
 - [ ] HUD displays properly
 
 During demo:
+
 - [ ] Show task menu (press T)
 - [ ] Start "Brush Teeth" task
 - [ ] Show voice guidance
@@ -281,14 +311,17 @@ During demo:
 ## 📝 FILES CREATED
 
 ### Backend
+
 - `backend/task_system.py` - Complete task definitions
 - `backend/app.py` - Updated with task endpoints
 
 ### Frontend
+
 - `mirror/modules/MMM-AssistiveCoach/MMM-AssistiveCoach.js` - Task menu UI
 - `mirror/modules/MMM-AssistiveCoach/styles.css` - Task menu styles
 
 ### Scripts
+
 - `scripts/demo_complete.sh` - Automated demo
 - `scripts/disable_compliments.sh` - Remove compliments
 - `scripts/restart_all.sh` - Restart everything

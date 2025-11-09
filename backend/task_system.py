@@ -227,59 +227,70 @@ TASKS = {
         ]
     ),
     
-    "put_on_shirt": Task(
-        task_id="put_on_shirt",
-        name="Put On Shirt",
-        category="dressing",
-        description="Put on a t-shirt or button-up shirt",
-        icon="👕",
-        total_time_estimate_s=45,
+    "draw_eyebrows": Task(
+        task_id="draw_eyebrows",
+        name="Draw Eyebrows",
+        category="grooming",
+        description="Apply eyebrow makeup with pencil or powder",
+        icon="�",
+        total_time_estimate_s=120,
         difficulty="medium",
         steps=[
             TaskStep(
                 step_num=1,
-                title="Hold Shirt",
-                instruction="Hold shirt with tag at back",
-                hint="Check the tag is at the back",
-                duration_s=5,
+                title="Prepare Tools",
+                instruction="Get eyebrow pencil/powder and brush ready",
+                hint="Have all your tools within reach",
+                duration_s=10,
                 aruco_marker_id=1,
-                voice_prompt="Step 1: Hold the shirt so the tag is at the back"
+                voice_prompt="Step 1: Get your eyebrow pencil, powder, and brush ready"
             ),
             TaskStep(
                 step_num=2,
-                title="Head Through",
-                instruction="Put head through neck opening",
-                hint="Stretch opening gently",
-                duration_s=10,
+                title="Brush Brows",
+                instruction="Brush eyebrows upward with spoolie",
+                hint="This reveals your natural shape",
+                duration_s=15,
                 aruco_marker_id=2,
-                voice_prompt="Step 2: Put your head through the neck opening"
+                requires_hand_motion=True,
+                voice_prompt="Step 2: Brush your eyebrows upward with a spoolie to see the natural shape"
             ),
             TaskStep(
                 step_num=3,
-                title="Right Arm",
-                instruction="Put right arm through right sleeve",
-                hint="Find the armhole",
-                duration_s=10,
+                title="Fill Sparse Areas",
+                instruction="Use light strokes to fill sparse areas",
+                hint="Start from the inner brow",
+                duration_s=30,
                 aruco_marker_id=3,
-                voice_prompt="Step 3: Put your right arm through the right sleeve"
+                requires_hand_motion=True,
+                voice_prompt="Step 3: Use light strokes to fill in any sparse areas, starting from the inner brow"
             ),
             TaskStep(
                 step_num=4,
-                title="Left Arm",
-                instruction="Put left arm through left sleeve",
-                hint="Find the armhole",
-                duration_s=10,
+                title="Define Shape",
+                instruction="Define the arch and tail of the brow",
+                hint="Follow your natural brow shape",
+                duration_s=30,
                 aruco_marker_id=4,
-                voice_prompt="Step 4: Put your left arm through the left sleeve"
+                requires_hand_motion=True,
+                voice_prompt="Step 4: Define the arch and tail, following your natural brow shape"
             ),
             TaskStep(
                 step_num=5,
-                title="Adjust",
-                instruction="Pull shirt down and adjust",
-                hint="Make sure it's comfortable",
-                duration_s=10,
-                aruco_marker_id=5,
-                voice_prompt="Step 5: Pull the shirt down and adjust it. Perfect!"
+                title="Blend and Set",
+                instruction="Blend with spoolie and apply brow gel",
+                hint="This keeps everything in place",
+                duration_s=20,
+                requires_hand_motion=True,
+                voice_prompt="Step 5: Blend everything with a spoolie and apply brow gel to set"
+            ),
+            TaskStep(
+                step_num=6,
+                title="Final Check",
+                instruction="Check symmetry and make any final adjustments",
+                hint="Step back and look at both brows together",
+                duration_s=15,
+                voice_prompt="Step 6: Check that both brows are symmetrical. Perfect! You look amazing!"
             ),
         ]
     ),
