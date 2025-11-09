@@ -6,6 +6,7 @@ const http = require("http");
 module.exports = NodeHelper.create({
 	start() {
 		this.wsUrl = null;
+		this.apiBase = "http://127.0.0.1:8000"; // Default to FastAPI backend
 		this.client = null;
 		this.connected = false;
 		this.messageCount = 0;
@@ -19,6 +20,10 @@ module.exports = NodeHelper.create({
 	socketNotificationReceived(notification, payload) {
 		if (notification === "MMM_ASSISTIVECOACH_INIT") {
 			this.wsUrl = payload.wsUrl;
+			// Honor apiBase from config if provided
+			if (payload.apiBase) {
+				this.apiBase = payload.apiBase;
+			}
 			this._connect();
 			this._scheduleHealthPoll();
 		}
@@ -103,7 +108,9 @@ module.exports = NodeHelper.create({
 	},
 
 	_pollHealth() {
-		const url = new URL("http://localhost:5055/health");
+		// Use configurable apiBase instead of hardcoded 5055
+		const healthUrl = `${this.apiBase}/health`;
+		const url = new URL(healthUrl);
 		const request = http.get(url, (response) => {
 			let data = "";
 			response.on("data", (chunk) => {
