@@ -63,5 +63,5 @@ class GeminiAssistant:
             except Exception as e:
                 LOGGER.warning(f"Gemini encountered an unexpected error: {e}")
 
-        LOGGER.error(f"GeminiAssistant failed to generate response after {retries} attempts.")
+        LOGGER.error(f"GeminiAssistant failed to generate response after {attempt+1} attempts.")
         return ""
