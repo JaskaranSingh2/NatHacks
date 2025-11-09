@@ -33,7 +33,8 @@ def load_camera_intrinsics(path: str = "config/camera_intrinsics.yml") -> Tuple[
     try:
         if not fs.isOpened():
             _INTRINSICS_OK = False
-            _INTRINSICS_ERR = f"unable to open: {path}"
+            # Prefer a clear error message for health reporting
+            _INTRINSICS_ERR = "file not found"
             return None, None, _INTRINSICS_OK, _INTRINSICS_ERR
         K = fs.getNode("K").mat()
         dist = fs.getNode("dist").mat()

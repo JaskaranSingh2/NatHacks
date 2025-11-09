@@ -168,6 +168,9 @@ class HealthResponse(BaseModel):
     cloud: Optional[Dict[str, Any]] = None
     mock_camera: bool
     camera_error: Optional[str] = None
+    pose_requested: Optional[bool] = None
+    pose_available: Optional[bool] = None
+    intrinsics_error: Optional[str] = None
 
 
 class SettingsState(BaseModel):
@@ -396,6 +399,23 @@ async def get_health() -> HealthResponse:
             "last_ok_ns": health_state.cloud_last_ok_ns,
         }
 
+    # Try to fetch last aruco meta from pipeline if present
+    pose_requested = getattr(settings_state, "pose", False)
+    pose_available = False
+    intrinsics_error = None
+    if _vision_pipeline is not None:
+        meta = getattr(_vision_pipeline, "_aruco_last_meta", None)
+        if isinstance(meta, dict):
+            pose_available = bool(meta.get("pose_available", False))
+            intrinsics_error = meta.get("intrinsics_error")
+    # Fallback: if pose requested but unavailable and no intrinsics_error captured yet, surface cached loader error
+    if pose_requested and not pose_available and not intrinsics_error:
+        try:
+            from backend import ar_overlay as _aru
+            intrinsics_error = getattr(_aru, "_INTRINSICS_ERR", intrinsics_error)
+        except Exception:  # pragma: no cover
+            pass
+
     return HealthResponse(
         camera=health_state.camera,
         lighting=health_state.lighting,
@@ -405,6 +425,9 @@ async def get_health() -> HealthResponse:
         cloud=cloud_state,
         mock_camera=health_state.mock_camera,
         camera_error=health_state.camera_error,
+        pose_requested=pose_requested,
+        pose_available=pose_available,
+        intrinsics_error=intrinsics_error,
     )
 
 

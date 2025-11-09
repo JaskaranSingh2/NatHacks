@@ -129,13 +129,27 @@ class VisionPipeline:
         self.refresh_cloud_limits()
         self._refresh_cloud_health()
 
-    # ArUco guidance state
+        # ArUco guidance state
         self._aruco_last_state = {}
         self._aruco_state_since = {}
         self._aruco_debounce_s = 0.25
         self._aruco_last_detection_ns = 0
-    self._aruco_last_meta: Optional[Dict[str, Any]] = None
-    self._aruco_pose_announced = False
+        self._aruco_last_meta: Optional[Dict[str, Any]] = None
+        self._aruco_pose_announced = False
+        # Prime intrinsics status once so /health can expose pose availability even before markers appear
+        try:
+            from backend.ar_overlay import load_camera_intrinsics
+            pose_requested = bool(getattr(self.settings, "pose", True))
+            if pose_requested:
+                _k, _d, ok, err = load_camera_intrinsics()
+                self._aruco_last_meta = {
+                    "pose_enabled": pose_requested,
+                    "pose_available": bool(ok),
+                    "intrinsics_error": (None if ok else err),
+                }
+        except Exception:
+            # Safe to ignore; will be populated on first detection
+            pass
         
         # Ensure logs directory exists
         LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -262,6 +276,19 @@ class VisionPipeline:
                             "ArUco pose availability: %s (error=%s)",
                             "enabled" if meta.get("pose_available") else "unavailable",
                             meta.get("intrinsics_error")
+                        )
+                        # Emit a single status message for the UI
+                        self.broadcast_fn(
+                            {
+                                "type": "status",
+                                "camera": getattr(self.health, "camera", "on"),
+                                "detectors": {
+                                    "aruco": True,
+                                    "pose_enabled": bool(meta.get("pose_enabled")),
+                                    "pose_available": bool(meta.get("pose_available")),
+                                },
+                                "intrinsics_error": meta.get("intrinsics_error"),
+                            }
                         )
                         self._aruco_pose_announced = True
                 except (RuntimeError, ImportError) as exc:
