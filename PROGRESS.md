@@ -14,6 +14,7 @@
 - Refreshed top-level documentation to cover credential setup, health monitoring, and the expanded CSV schema.
 - Implemented Step E: ArUco tool guidance with 2D fallback and pose-enabled tilt hints; added subsampled detection, EMA smoothing, and a debounced guidance state machine; created calibration and marker generation scripts.
 - Step F (Accessibility polish) completed: added design tokens, reduced-motion support (OS + server override), keyboard demo shortcuts (viewer + MagicMirror module), focus-visible outlines, standalone mock browser viewer (`tools/viewer.html`), and backend `reduce_motion` setting + `/health` exposure.
+- **Contextual Overlay System**: Implemented comprehensive step-specific facial region guidance using MediaPipe FaceMesh (468 landmarks). System supports 17 facial regions (mouth, eyes, cheeks, brows, forehead, chin, jaw, nose) mapped to 6 ADL tasks (brush_teeth, wash_face, comb_hair, draw_eyebrows, shave, moisturize) with arrow directional guidance. Verified via WebSocket testing showing correct region-specific overlays appearing per task step. See `CONTEXTUAL_OVERLAYS.md` for full documentation.
 
 ## Open Risks & Follow-Ups
 

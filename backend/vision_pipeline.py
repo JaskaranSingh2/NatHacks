@@ -60,6 +60,7 @@ class VisionPipeline:
         *,
         camera_enabled: bool = True,
         camera_override: Optional[Any] = None,
+        preview_fn: Optional[Callable[[bytes], None]] = None,
     ) -> None:
         """
         Initialize vision pipeline.
@@ -78,13 +79,31 @@ class VisionPipeline:
         self.settings = settings
         self.session = session
         self.health = health
-        
+        self.set_preview_frame = preview_fn
+
         # Initialize camera
         if camera_override is not None:
             self.camera = camera_override
         elif camera_enabled:
             from backend.camera_capture import CameraCapture
-            self.camera = CameraCapture(camera_width, camera_height, camera_fps, camera_device)
+
+            preview_callback = self.set_preview_frame
+            if preview_callback is None:
+                from backend.app import set_preview_frame as _app_preview
+
+                preview_callback = _app_preview
+                self.set_preview_frame = preview_callback
+
+            camera_preview_fn = None if preview_fn is not None else preview_callback
+
+            self.camera = CameraCapture(
+                camera_width,
+                camera_height,
+                camera_fps,
+                camera_device,
+                health_state=self.health,
+                set_preview_fn=camera_preview_fn,
+            )
         else:
             class _DummyCamera:
                 def __init__(self, width: int, height: int) -> None:
@@ -136,6 +155,54 @@ class VisionPipeline:
             self._cloud_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="CloudVision")
         self.refresh_cloud_limits()
         self._refresh_cloud_health()
+<<<<<<< HEAD
+=======
+
+        # ArUco guidance state
+        self._aruco_last_state = {}
+        self._aruco_state_since = {}
+        self._aruco_debounce_s = 0.25
+        self._aruco_last_detection_ns = 0
+        self._aruco_last_detection_s = 0.0  # wall-clock seconds of last successful detection
+        self._aruco_last_meta = None  # type: Optional[Dict[str, Any]]
+        self._aruco_pose_announced = False
+        self._last_ar_anchors = []  # type: List[Dict[str, Any]]
+        # Frame gating & overlay throttle
+        self._i = 0
+        self._overlay_min_interval_ms = 66  # ~15 Hz
+        self._last_overlay_ts_ms = 0
+        # Adaptive performance state
+        self._face_frame_stride = 1  # dynamic: may increase under load
+        self._aruco_frame_stride = 2  # default every 2 frames; may increase
+        # Respect initial stride from shared settings if provided
+        try:
+            init_stride = int(getattr(self.settings, "aruco_stride", 2))
+            if 1 <= init_stride <= 8:
+                self._aruco_frame_stride = init_stride
+        except Exception as exc:
+            LOGGER.debug("Could not read aruco_stride setting, using default: %s", exc)
+        self._face_target_w = camera_width  # will downscale under load
+        self._last_landmarks = {}
+        self._last_face_mesh = None  # raw mediapipe face mesh for contextual overlays
+        self._high_latency_frames = 0
+        self._high_latency_max_ms = 0.0
+        self._latency_window_frames = 0
+        self._perf_last_adapt_ns = time.time_ns()
+        # Prime intrinsics status once so /health can expose pose availability even before markers appear
+        try:
+            from backend.ar_overlay import load_camera_intrinsics
+            pose_requested = bool(getattr(self.settings, "pose", True))
+            if pose_requested:
+                _k, _d, ok, err = load_camera_intrinsics()
+                self._aruco_last_meta = {
+                    "pose_enabled": pose_requested,
+                    "pose_available": bool(ok),
+                    "intrinsics_error": (None if ok else err),
+                }
+        except Exception as exc:
+            # Safe to ignore; will be populated on first detection
+            LOGGER.debug("Could not initialize ArUco intrinsics status: %s", exc)
+>>>>>>> 7fc4bada007a4fbf81756999578859c9dac03fb9
         
         # Ensure logs directory exists
         LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -150,27 +217,355 @@ class VisionPipeline:
         
         LOGGER.info("VisionPipeline initialized: %dx%d @ %dfps", camera_width, camera_height, camera_fps)
 
+    # ------------------------------------------------------------------
+    # Landmark utilities for contextual task overlays
+    # ------------------------------------------------------------------
+    def _extract_face_landmarks(self, face_result: Any) -> Dict[int, Tuple[float, float]]:
+        """Return dict of landmark_index -> (x,y) normalized (0..1)."""
+        lm_map: Dict[int, Tuple[float, float]] = {}
+        try:
+            if not face_result or not getattr(face_result, "multi_face_landmarks", None):
+                return lm_map
+            face_landmarks = face_result.multi_face_landmarks[0]  # assume 1 face
+            for i, lm in enumerate(face_landmarks.landmark):  # type: ignore[attr-defined]
+                lm_map[i] = (lm.x, lm.y)
+        except Exception:
+            return lm_map
+        return lm_map
+
+    def _compute_face_regions(self, lm_map: Dict[int, Tuple[float, float]]) -> Dict[str, Dict[str, int]]:
+        """Compute all facial region centers from FaceMesh 468 landmarks.
+        Returns pixel coordinates for mouth, eyes, cheeks, forehead, chin, nose regions.
+        FaceMesh landmark reference: https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_geometry/data/canonical_face_model_uv_visualization.png
+        """
+        if not lm_map:
+            return {}
+        
+        def _avg(indices: List[int]) -> Tuple[float, float]:
+            pts = [lm_map[i] for i in indices if i in lm_map]
+            if not pts:
+                return (0.5, 0.5)
+            x = sum(p[0] for p in pts) / len(pts)
+            y = sum(p[1] for p in pts) / len(pts)
+            return (x, y)
+        
+        # Mouth regions (lips outer contours)
+        mouth_upper_indices = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291]
+        mouth_lower_indices = [146, 91, 181, 84, 17, 314, 405, 321, 375, 291]
+        mouth_left_indices = [61, 76, 62, 78, 81, 13, 82]
+        mouth_right_indices = [291, 306, 292, 308, 311, 14, 312]
+        mouth_center_indices = [13, 14, 17, 0]
+        
+        # Eye regions (around eye contours)
+        eye_left_indices = [33, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7]
+        eye_right_indices = [263, 387, 386, 385, 384, 398, 362, 382, 381, 380, 374, 373, 390, 249]
+        
+        # Cheek regions (mid-face area)
+        cheek_left_indices = [116, 123, 147, 213, 192, 214]
+        cheek_right_indices = [345, 352, 376, 433, 416, 434]
+        
+        # Forehead / brow regions
+        brow_left_indices = [70, 63, 105, 66, 107, 55, 65]
+        brow_right_indices = [300, 293, 334, 296, 336, 285, 295]
+        forehead_center_indices = [10, 151, 9, 8]
+        
+        # Chin / jaw region
+        chin_center_indices = [152, 148, 149, 176, 148, 152]
+        jaw_left_indices = [172, 136, 150, 149]
+        jaw_right_indices = [397, 365, 379, 378]
+        
+        # Nose regions
+        nose_tip_indices = [1, 2]
+        nose_bridge_indices = [6, 197, 195, 5]
+        
+        regions: Dict[str, Dict[str, int]] = {}
+        
+        # Compute all regions
+        region_map = {
+            "mouth_upper": mouth_upper_indices,
+            "mouth_lower": mouth_lower_indices,
+            "mouth_left": mouth_left_indices,
+            "mouth_right": mouth_right_indices,
+            "mouth_center": mouth_center_indices,
+            "eye_left": eye_left_indices,
+            "eye_right": eye_right_indices,
+            "cheek_left": cheek_left_indices,
+            "cheek_right": cheek_right_indices,
+            "brow_left": brow_left_indices,
+            "brow_right": brow_right_indices,
+            "forehead_center": forehead_center_indices,
+            "chin_center": chin_center_indices,
+            "jaw_left": jaw_left_indices,
+            "jaw_right": jaw_right_indices,
+            "nose_tip": nose_tip_indices,
+            "nose_bridge": nose_bridge_indices,
+        }
+        
+        for region_name, indices in region_map.items():
+            nx, ny = _avg(indices)
+            regions[region_name] = {
+                "x": int(nx * self.frame_w),
+                "y": int(ny * self.frame_h),
+            }
+        
+        return regions
+
+    def _task_overlay_shapes(self, lm_map: Dict[int, Tuple[float, float]]) -> List[Dict[str, Any]]:
+        """Return shapes list contextual to active task step.
+        Maps task steps to facial regions with appropriate visual guidance.
+        """
+        task_id = getattr(self.session, "routine_id", None)
+        step_index = getattr(self.session, "step_index", 0)
+        if not task_id:
+            return []
+        
+        regions = self._compute_face_regions(lm_map)
+        if not regions:
+            return []
+        
+        # Task-specific step mappings: step_index -> (region_keys, shape_config)
+        task_mappings = {
+            "brush_teeth": {
+                0: {  # Wet toothbrush - show mouth center
+                    "regions": ["mouth_center"],
+                    "radius": 80,
+                    "show_arrow": False,
+                },
+                1: {  # Upper teeth
+                    "regions": ["mouth_upper"],
+                    "radius": 110,
+                    "show_arrow": True,
+                    "arrow_from": "mouth_left",
+                    "arrow_to": "mouth_right",
+                },
+                2: {  # Lower teeth
+                    "regions": ["mouth_lower"],
+                    "radius": 110,
+                    "show_arrow": True,
+                    "arrow_from": "mouth_left",
+                    "arrow_to": "mouth_right",
+                },
+                3: {  # Tongue
+                    "regions": ["mouth_center"],
+                    "radius": 90,
+                    "show_arrow": False,
+                },
+            },
+            "wash_face": {
+                0: {  # Wet face - show full face
+                    "regions": ["forehead_center", "cheek_left", "cheek_right", "chin_center"],
+                    "radius": 90,
+                    "show_arrow": False,
+                },
+                1: {  # Apply cleanser (hands, skip facial overlay)
+                    "regions": [],
+                    "radius": 0,
+                    "show_arrow": False,
+                },
+                2: {  # Massage face - show cheeks with circular motion hint
+                    "regions": ["cheek_left", "cheek_right", "forehead_center"],
+                    "radius": 110,
+                    "show_arrow": True,
+                    "arrow_from": "nose_bridge",
+                    "arrow_to": "cheek_right",
+                },
+                3: {  # Rinse - show full face again
+                    "regions": ["forehead_center", "cheek_left", "cheek_right", "chin_center"],
+                    "radius": 90,
+                    "show_arrow": False,
+                },
+                4: {  # Pat dry - show cheeks
+                    "regions": ["cheek_left", "cheek_right"],
+                    "radius": 100,
+                    "show_arrow": False,
+                },
+            },
+            "comb_hair": {
+                0: {  # Detangle ends (hair, not facial regions - minimal overlay)
+                    "regions": [],
+                    "radius": 0,
+                    "show_arrow": False,
+                },
+                1: {  # Detangle ends
+                    "regions": [],
+                    "radius": 0,
+                    "show_arrow": False,
+                },
+                2: {  # Brush from roots - show forehead region
+                    "regions": ["forehead_center"],
+                    "radius": 130,
+                    "show_arrow": True,
+                    "arrow_from": "forehead_center",
+                    "arrow_to": "chin_center",
+                },
+                3: {  # Style
+                    "regions": [],
+                    "radius": 0,
+                    "show_arrow": False,
+                },
+            },
+            "draw_eyebrows": {
+                0: {  # Prepare tools
+                    "regions": [],
+                    "radius": 0,
+                    "show_arrow": False,
+                },
+                1: {  # Brush brows
+                    "regions": ["brow_left", "brow_right"],
+                    "radius": 80,
+                    "show_arrow": False,
+                },
+                2: {  # Fill left brow
+                    "regions": ["brow_left"],
+                    "radius": 85,
+                    "show_arrow": True,
+                    "arrow_from": "nose_bridge",
+                    "arrow_to": "brow_left",
+                },
+                3: {  # Fill right brow
+                    "regions": ["brow_right"],
+                    "radius": 85,
+                    "show_arrow": True,
+                    "arrow_from": "nose_bridge",
+                    "arrow_to": "brow_right",
+                },
+                4: {  # Blend
+                    "regions": ["brow_left", "brow_right"],
+                    "radius": 80,
+                    "show_arrow": False,
+                },
+                5: {  # Final check
+                    "regions": ["brow_left", "brow_right"],
+                    "radius": 80,
+                    "show_arrow": False,
+                },
+            },
+            "shave": {
+                0: {  # Prep skin
+                    "regions": ["cheek_left", "cheek_right"],
+                    "radius": 120,
+                    "show_arrow": False,
+                },
+                1: {  # Right cheek
+                    "regions": ["cheek_right"],
+                    "radius": 130,
+                    "show_arrow": True,
+                    "arrow_from": "jaw_right",
+                    "arrow_to": "cheek_right",
+                },
+                2: {  # Left cheek
+                    "regions": ["cheek_left"],
+                    "radius": 130,
+                    "show_arrow": True,
+                    "arrow_from": "jaw_left",
+                    "arrow_to": "cheek_left",
+                },
+                3: {  # Neck
+                    "regions": ["chin_center"],
+                    "radius": 100,
+                    "show_arrow": True,
+                    "arrow_from": "chin_center",
+                    "arrow_to": "mouth_center",
+                },
+            },
+            "moisturize": {
+                0: {  # Dispense lotion (hands not facial region, skip overlay)
+                    "regions": [],
+                    "radius": 0,
+                    "show_arrow": False,
+                },
+                1: {  # Cheeks
+                    "regions": ["cheek_left", "cheek_right"],
+                    "radius": 120,
+                    "show_arrow": False,
+                },
+                2: {  # Forehead
+                    "regions": ["brow_left", "brow_right", "forehead_center"],
+                    "radius": 100,
+                    "show_arrow": True,
+                    "arrow_from": "forehead_center",
+                    "arrow_to": "brow_right",
+                },
+                3: {  # Neck
+                    "regions": ["chin_center"],
+                    "radius": 100,
+                    "show_arrow": True,
+                    "arrow_from": "chin_center",
+                    "arrow_to": "mouth_lower",
+                },
+            },
+        }
+        
+        # Get mapping for current task and step
+        task_map = task_mappings.get(task_id)
+        if not task_map:
+            return []
+        
+        step_config = task_map.get(step_index)
+        if not step_config:
+            return []
+        
+        shapes: List[Dict[str, Any]] = []
+        region_keys = step_config.get("regions", [])
+        radius = step_config.get("radius", 100)
+        
+        # Add ring for each target region
+        for region_key in region_keys:
+            pt = regions.get(region_key)
+            if not pt:
+                continue
+            
+            # Clean up region name for display
+            display_name = region_key.replace("_", " ").title()
+            if "Left" in display_name or "Right" in display_name:
+                display_name = display_name.split()[0]  # Just "Cheek", "Eye", etc.
+            
+            shapes.append({
+                "kind": "ring",
+                "anchor": {"pixel": {"x": pt["x"], "y": pt["y"]}},
+                "radius_px": radius,
+                "accent": "info",
+                "text": display_name,
+            })
+        
+        # Add directional arrow if specified
+        if step_config.get("show_arrow"):
+            arrow_from = step_config.get("arrow_from")
+            arrow_to = step_config.get("arrow_to")
+            if arrow_from and arrow_to:
+                pt_from = regions.get(arrow_from)
+                pt_to = regions.get(arrow_to)
+                if pt_from and pt_to:
+                    shapes.append({
+                        "kind": "arrow",
+                        "anchor": {"pixel": {"x": pt_from["x"], "y": pt_from["y"]}},
+                        "to": {"pixel": {"x": pt_to["x"], "y": pt_to["y"]}},
+                        "accent": "info",
+                    })
+        
+        return shapes
+
     def _init_mediapipe(self) -> Any:  # pragma: no cover
-        """Initialize MediaPipe Face Mesh detector."""
+        """Initialize MediaPipe FaceMesh model (lazy import)."""
         try:
             import mediapipe as mp  # type: ignore[import]
-            face_mesh = mp.solutions.face_mesh.FaceMesh(
-                refine_landmarks=True,
+            face_mesh = mp.solutions.face_mesh.FaceMesh(  # type: ignore[attr-defined]
                 max_num_faces=1,
+                refine_landmarks=True,
                 min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
+                min_tracking_confidence=0.5,
             )
-            LOGGER.info("MediaPipe Face Mesh initialized")
+            LOGGER.info("MediaPipe FaceMesh initialized")
             return face_mesh
         except ImportError:
-            LOGGER.warning("MediaPipe not available; using synthetic mode")
+            LOGGER.warning("MediaPipe FaceMesh not available")
             return None
 
     def _init_hands(self) -> Any:  # pragma: no cover
         """Initialize MediaPipe Hands detector."""
         try:
             import mediapipe as mp  # type: ignore[import]
-            hands = mp.solutions.hands.Hands(
+            hands = mp.solutions.hands.Hands(  # type: ignore[attr-defined]
                 max_num_hands=1,
                 min_detection_confidence=0.5,
                 min_tracking_confidence=0.5
@@ -308,9 +703,63 @@ class VisionPipeline:
             all_landmarks = {**landmarks, **hand_landmarks}
             shapes_start_perf = time.perf_counter()
             overlay_shapes = self._build_shapes(all_landmarks, frame_w, frame_h, ar_anchors)
+<<<<<<< HEAD
+=======
+
+            # Auto ArUco ring overlays (idle clear after 0.75s)
+            if getattr(self.settings, "overlay_from_aruco", True):
+                now_s = time.time()
+                age_s = now_s - self._aruco_last_detection_s
+                if age_s < 0.75 and self._last_ar_anchors:
+                    for anchor in self._last_ar_anchors:
+                        center = anchor.get("center_px")
+                        if not isinstance(center, dict):
+                            continue
+                        cx = float(center.get("x", 0.0))
+                        cy = float(center.get("y", 0.0))
+                        overlay_shapes.append(
+                            {
+                                "kind": "ring",
+                                "anchor": {"pixel": {"x": cx, "y": cy}},
+                                "radius_px": 60,
+                                "accent": "info",
+                            }
+                        )
+
+            if self.settings.aruco and ar_anchors:
+                guidance = self._build_tool_guidance(ar_anchors, all_landmarks, frame_w, frame_h)
+                overlay_shapes.extend(guidance)
+            # Contextual task-specific overlays (e.g., mouth quadrants)
+            try:
+                if self._last_face_mesh is not None and getattr(self.session, "routine_id", None):
+                    lm_full = {i: (lm.x, lm.y) for i, lm in enumerate(self._last_face_mesh.landmark)}
+                    contextual = self._task_overlay_shapes(lm_full)
+                    if contextual:
+                        overlay_shapes.extend(contextual)
+            except Exception as exc:
+                LOGGER.debug("Contextual overlay generation failed: %s", exc)
+>>>>>>> 7fc4bada007a4fbf81756999578859c9dac03fb9
             hud = self._build_hud()
             shapes_end_perf = time.perf_counter()
-            
+
+            # Draw debug overlays on preview frame and publish annotated frames
+            try:
+                self._draw_debug_overlays(frame_rgb, landmarks, hand_landmarks, ar_anchors)
+            except Exception as exc:  # pragma: no cover - debug aid
+                LOGGER.debug("Debug overlay drawing failed: %s", exc)
+
+            if self.set_preview_frame and frame_count % 2 == 0:
+                try:
+                    prev_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                    _, buffer = cv2.imencode(
+                        ".jpg",
+                        prev_bgr,
+                        [cv2.IMWRITE_JPEG_QUALITY, 85],
+                    )
+                    self.set_preview_frame(bytes(buffer))
+                except Exception as exc:  # pragma: no cover - preview is best-effort
+                    LOGGER.debug("Preview publish failed: %s", exc)
+
             message = {
                 "type": "overlay.set",
                 "shapes": overlay_shapes,
@@ -464,6 +913,8 @@ class VisionPipeline:
             return {}
         
         face_landmarks = results.multi_face_landmarks[0]
+        # Store raw mesh for contextual overlays (e.g., mouth quadrants)
+        self._last_face_mesh = face_landmarks
         
         # Update face bbox for ROI tracking
         h, w = frame_rgb.shape[:2]
@@ -578,6 +1029,67 @@ class VisionPipeline:
         self._ema[name] = smoothed
         return smoothed
 
+    def _draw_debug_overlays(
+        self,
+        frame: np.ndarray,
+        landmarks: Dict[str, Tuple[float, float]],
+        hand_landmarks: Dict[str, Tuple[float, float]],
+        ar_anchors: List[Dict[str, Any]],
+    ) -> None:
+        """Draw detection overlays on frame for debug preview"""
+        h, w = frame.shape[:2]
+        
+        # Draw face landmarks (green dots)
+        for name, (nx, ny) in landmarks.items():
+            if 'hand' not in name.lower():  # Skip hand landmarks
+                x, y = int(nx * w), int(ny * h)
+                cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
+        
+        # Draw face bounding box if we have landmarks
+        if landmarks:
+            # Find bounding box of all face landmarks
+            face_points = [(int(nx * w), int(ny * h)) for name, (nx, ny) in landmarks.items() if 'hand' not in name.lower()]
+            if face_points:
+                xs = [p[0] for p in face_points]
+                ys = [p[1] for p in face_points]
+                x1, y1 = min(xs), min(ys)
+                x2, y2 = max(xs), max(ys)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, "FACE DETECTED", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        
+        # Draw hand landmarks (blue dots)
+        for name, (nx, ny) in hand_landmarks.items():
+            x, y = int(nx * w), int(ny * h)
+            cv2.circle(frame, (x, y), 5, (255, 0, 0), -1)
+        
+        # Draw hand bounding box
+        if hand_landmarks:
+            hand_points = [(int(nx * w), int(ny * h)) for nx, ny in hand_landmarks.values()]
+            if hand_points:
+                xs = [p[0] for p in hand_points]
+                ys = [p[1] for p in hand_points]
+                x1, y1 = min(xs), min(ys)
+                x2, y2 = max(xs), max(ys)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(frame, "HAND", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+        
+        # Draw ArUco markers (red squares)
+        for anchor in ar_anchors:
+            center = anchor.get("center_px")
+            if isinstance(center, dict) and "x" in center and "y" in center:
+                cx, cy = int(center["x"]), int(center["y"])
+                marker_id = anchor.get("id", "?")
+                cv2.circle(frame, (cx, cy), 20, (0, 0, 255), 3)
+                cv2.putText(frame, f"ArUco #{marker_id}", (cx + 25, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        
+        # Draw status overlay
+        status_y = 30
+        cv2.rectangle(frame, (0, 0), (300, 120), (0, 0, 0), -1)
+        cv2.putText(frame, f"FPS: {self.health.fps:.1f}", (10, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(frame, f"Face: {'YES' if landmarks else 'NO'}", (10, status_y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(frame, f"Hands: {'YES' if hand_landmarks else 'NO'}", (10, status_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(frame, f"ArUco: {len(ar_anchors)}", (10, status_y + 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
     def _build_shapes(
         self,
         landmarks: Dict[str, Tuple[float, float]],
@@ -638,15 +1150,36 @@ class VisionPipeline:
                         }
                     )
         else:
-            # Default fallback ring at screen center (no active routine)
-            shapes.append(
-                {
-                    "kind": "ring",
-                    "anchor": {"pixel": {"x": width / 2, "y": height / 2}},
-                    "radius_px": 80,
-                    "accent": "neutral",
-                }
-            )
+            # No active routine: keep ring anchored to face if available so it follows the user.
+            focus_anchor = None
+            if "mouth_center" in landmarks:
+                focus_anchor = landmarks["mouth_center"]
+            elif landmarks:
+                # Average all face-related landmarks (skip hand entries)
+                face_points = [
+                    coords
+                    for name, coords in landmarks.items()
+                    if "hand" not in name.lower()
+                ]
+                if face_points:
+                    avg_x = sum(pt[0] for pt in face_points) / len(face_points)
+                    avg_y = sum(pt[1] for pt in face_points) / len(face_points)
+                    focus_anchor = (avg_x, avg_y)
+
+            if focus_anchor:
+                shapes.append(
+                    {
+                        "kind": "ring",
+                        "anchor": {
+                            "pixel": {
+                                "x": focus_anchor[0] * width,
+                                "y": focus_anchor[1] * height,
+                            }
+                        },
+                        "radius_px": 110,
+                        "accent": "info",
+                    }
+                )
 
         # Add ArUco marker badges
         # (Badge creation moved to guidance logic)

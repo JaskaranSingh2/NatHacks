@@ -14,6 +14,7 @@ if (reduceMotion) {
 Module.register("MMM-AssistiveCoach", {
 	defaults: {
 		wsUrl: "ws://localhost:5055/ws/mirror",
+		apiBase: "http://127.0.0.1:8000", // Default to FastAPI backend
 		theme: "high-contrast",
 		fontScale: 1.0,
 		reduceMotion: reduceMotion,
@@ -28,14 +29,19 @@ Module.register("MMM-AssistiveCoach", {
 				lighting: "unknown",
 				mic: "off",
 			},
+			showTaskMenu: false,
+			availableTasks: [],
+			currentTask: null,
 		};
 		this.socketConnected = false;
 		this.pendingOverlay = null;
 		this.rafScheduled = false;
 		this._setupDomReadyListener();
 		this._setupKeyboardShortcuts();
+		this._loadAvailableTasks(); // Load tasks from backend
 		this.sendSocketNotification("MMM_ASSISTIVECOACH_INIT", {
 			wsUrl: this.config.wsUrl,
+			apiBase: this.config.apiBase, // Pass apiBase to node_helper
 		});
 	},
 
@@ -71,6 +77,31 @@ Module.register("MMM-AssistiveCoach", {
 		this._renderHud(hud);
 		container.appendChild(hud);
 
+		// Render task menu if shown
+		this._renderTaskMenu(container);
+
+		// Camera preview panel (bottom-right corner)
+		const preview = document.createElement("img");
+		preview.id = "camera-preview";
+		preview.style.cssText = `
+			position: fixed;
+			bottom: 20px;
+			right: 20px;
+			width: 320px;
+			height: 240px;
+			border: 3px solid #00bcd4;
+			border-radius: 10px;
+			box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+			z-index: 9999;
+		`;
+		const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+		preview.src = `${apiBase}/preview.jpg?t=${Date.now()}`;
+		// Refresh preview every 100ms (10 FPS)
+		setInterval(() => {
+			preview.src = `${apiBase}/preview.jpg?t=${Date.now()}`;
+		}, 100);
+		container.appendChild(preview);
+
 		const overlay = document.createElementNS(
 			"http://www.w3.org/2000/svg",
 			"svg"
@@ -95,8 +126,48 @@ Module.register("MMM-AssistiveCoach", {
 
 	_setupKeyboardShortcuts() {
 		document.addEventListener("keydown", (e) => {
-			if (["1", "2", "3"].includes(e.key)) {
-				this._demoStep(Number(e.key));
+			// Prevent default if we're handling the key
+			const isOurKey =
+				["t", "n", "1", "2", "3", "4"].includes(e.key.toLowerCase()) ||
+				(e.key.toLowerCase() === "s" && e.shiftKey);
+
+			// T = Toggle task menu
+			if (e.key.toLowerCase() === "t") {
+				e.preventDefault();
+				this._toggleTaskMenu();
+				console.log("Toggling task menu");
+			}
+			// N = Next step (in active task)
+			else if (e.key.toLowerCase() === "n") {
+				e.preventDefault();
+				this._nextStep();
+				console.log("Next step");
+			}
+			// S = Stop current task
+			else if (e.key.toLowerCase() === "s" && e.shiftKey) {
+				e.preventDefault();
+				this._stopTask();
+				console.log("Stopping task");
+			}
+			// Number keys 1-4 = Start specific task quickly
+			else if (["1", "2", "3", "4"].includes(e.key)) {
+				const taskIndex = Number(e.key) - 1;
+				console.log(
+					`Key ${e.key} pressed, task index: ${taskIndex}, available tasks:`,
+					this.state.availableTasks
+				);
+				if (this.state.availableTasks && this.state.availableTasks[taskIndex]) {
+					e.preventDefault();
+					const taskId = this.state.availableTasks[taskIndex].task_id;
+					console.log(`Starting task: ${taskId}`);
+					this._startTask(taskId);
+				} else {
+					console.warn(
+						`No task at index ${taskIndex}. Tasks loaded: ${
+							this.state.availableTasks?.length || 0
+						}`
+					);
+				}
 			}
 		});
 	},
@@ -258,12 +329,17 @@ Module.register("MMM-AssistiveCoach", {
 			const stepEl = hud.querySelector(".hud-step");
 			const subtitleEl = hud.querySelector(".hud-subtitle");
 			const hintEl = hud.querySelector(".hud-hint");
+			const coachEl = hud.querySelector("#coach-tip");
 			const progressEl = hud.querySelector(".progress");
 
 			if (titleEl) titleEl.textContent = msg.hud.title || "";
 			if (stepEl) stepEl.textContent = msg.hud.step || "";
 			if (subtitleEl) subtitleEl.textContent = msg.hud.subtitle || "";
 			if (hintEl) hintEl.textContent = msg.hud.hint || "";
+			if (coachEl)
+				coachEl.textContent = msg.hud.coach_tip
+					? `Coach: ${msg.hud.coach_tip}`
+					: "";
 
 			if (progressEl && typeof msg.hud.time_left_s === "number") {
 				const timeLeft = Math.max(0, msg.hud.time_left_s);
@@ -353,6 +429,14 @@ Module.register("MMM-AssistiveCoach", {
 		hintEl.className = "hud-hint";
 		card.appendChild(hintEl);
 
+		// Coach tip element (optional, styled like hint but dimmer)
+		const coachEl = document.createElement("div");
+		coachEl.className = "hud-hint";
+		coachEl.style.opacity = 0.85;
+		coachEl.style.marginTop = "8px";
+		coachEl.id = "coach-tip";
+		card.appendChild(coachEl);
+
 		hud.appendChild(card);
 	},
 
@@ -363,21 +447,68 @@ Module.register("MMM-AssistiveCoach", {
 		}
 		chips.innerHTML = "";
 
-		const makeChip = (label, status) => {
+		const makeChip = (label, status, clickHandler) => {
 			const chip = document.createElement("div");
 			chip.className = `chip chip--${status}`;
 			chip.textContent = label;
+			chip.style.cursor = clickHandler ? "pointer" : "default";
+			if (clickHandler) {
+				chip.addEventListener("click", clickHandler);
+				chip.setAttribute("role", "button");
+				chip.setAttribute("tabindex", "0");
+			}
 			return chip;
 		};
 
+		// Tasks menu button
+		chips.appendChild(makeChip("Tasks", "ok", () => this._toggleTaskMenu()));
+
+		// Camera chip - toggle camera on/off
 		chips.appendChild(
-			makeChip("Camera", this._statusTone(this.state.devices.camera))
+			makeChip("Camera", this._statusTone(this.state.devices.camera), () =>
+				this._toggleSetting("camera")
+			)
+		);
+
+		// Lighting chip - cycle through lighting modes
+		chips.appendChild(
+			makeChip("Lighting", this._statusTone(this.state.devices.lighting), () =>
+				this._toggleSetting("lighting")
+			)
+		);
+
+		// Mic chip - toggle mic (currently not used by backend)
+		chips.appendChild(
+			makeChip("Mic", this._statusTone(this.state.devices.mic || "ok"), () =>
+				this._toggleSetting("mic")
+			)
+		);
+
+		// Controls (Next, Stop, Replay, Coach)
+		chips.appendChild(makeChip("Next", "ok", () => this._nextStep()));
+		chips.appendChild(makeChip("Stop", "warn", () => this._stopTask()));
+		chips.appendChild(
+			makeChip("Replay", "ok", () => {
+				const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+				fetch(`${apiBase}/tts/replay`, { method: "POST" }).catch(() => {});
+			})
 		);
 		chips.appendChild(
-			makeChip("Lighting", this._statusTone(this.state.devices.lighting))
-		);
-		chips.appendChild(
-			makeChip("Mic", this._statusTone(this.state.devices.mic || "ok"))
+			makeChip("Coach", "ok", () => {
+				const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+				fetch(`${apiBase}/genai/coach`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({}),
+				})
+					.then((r) => r.json())
+					.then((data) => {
+						this.state.hud = this.state.hud || {};
+						this.state.hud.coach_tip = data.coach_tip;
+						this.updateDom(0);
+					})
+					.catch(() => {});
+			})
 		);
 
 		if (!this.socketConnected) {
@@ -386,6 +517,46 @@ Module.register("MMM-AssistiveCoach", {
 			chip.textContent = "Link";
 			chips.appendChild(chip);
 		}
+	},
+
+	_toggleSetting(settingName) {
+		const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+		const currentState = this.state.devices[settingName];
+
+		let newSettings = {};
+
+		if (settingName === "camera") {
+			// Toggle camera on/off by toggling pose detection
+			const isOn = currentState === "on";
+			newSettings = {
+				pose: !isOn,
+				hands: !isOn,
+				aruco: !isOn,
+			};
+		} else if (settingName === "lighting") {
+			// Cycle lighting modes (this is UI only, backend doesn't control lighting)
+			console.log("Lighting toggle requested (UI feedback only)");
+			return;
+		} else if (settingName === "mic") {
+			// Mic toggle (backend doesn't use this yet)
+			console.log("Mic toggle requested (not implemented in backend)");
+			return;
+		}
+
+		// Send settings to backend
+		fetch(`${apiBase}/settings`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(newSettings),
+		})
+			.then((res) => res.json())
+			.then((data) => {
+				console.log("Settings updated:", data);
+				// Update will come through health poll
+			})
+			.catch((err) => {
+				console.error("Failed to update settings:", err);
+			});
 	},
 
 	_statusTone(value) {
@@ -535,5 +706,130 @@ Module.register("MMM-AssistiveCoach", {
 		setTimeout(() => {
 			alert.remove();
 		}, 4000);
+	},
+
+	// ========================================================================
+	// TASK SYSTEM METHODS
+	// ========================================================================
+
+	_loadAvailableTasks() {
+		const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+		fetch(`${apiBase}/tasks`)
+			.then((res) => res.json())
+			.then((data) => {
+				this.state.availableTasks = data.tasks || [];
+				console.log(`Loaded ${this.state.availableTasks.length} tasks`);
+			})
+			.catch((err) => {
+				console.error("Failed to load tasks:", err);
+			});
+	},
+
+	_toggleTaskMenu() {
+		this.state.showTaskMenu = !this.state.showTaskMenu;
+		this.updateDom(300);
+	},
+
+	_startTask(taskId) {
+		const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+		fetch(`${apiBase}/tasks/${taskId}/start`, { method: "POST" })
+			.then((res) => res.json())
+			.then((data) => {
+				console.log("Task started:", data);
+				this.state.showTaskMenu = false;
+				this.state.currentTask = data;
+				this.updateDom(0);
+			})
+			.catch((err) => {
+				console.error("Failed to start task:", err);
+			});
+	},
+
+	_nextStep() {
+		const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+		fetch(`${apiBase}/tasks/next_step`, { method: "POST" })
+			.then((res) => res.json())
+			.then((data) => {
+				console.log("Next step:", data);
+				if (data.task_complete) {
+					this.state.currentTask = null;
+				}
+			})
+			.catch((err) => {
+				console.error("Failed to advance step:", err);
+			});
+	},
+
+	_stopTask() {
+		const apiBase = this.config.apiBase || "http://127.0.0.1:8000";
+		fetch(`${apiBase}/tasks/stop`, { method: "POST" })
+			.then((res) => res.json())
+			.then((data) => {
+				console.log("Task stopped:", data);
+				this.state.currentTask = null;
+				this.updateDom(0);
+			})
+			.catch((err) => {
+				console.error("Failed to stop task:", err);
+			});
+	},
+
+	_renderTaskMenu(container) {
+		if (!this.state.showTaskMenu || this.state.availableTasks.length === 0) {
+			return;
+		}
+
+		const menu = document.createElement("div");
+		menu.className = "task-menu";
+
+		const title = document.createElement("h2");
+		title.textContent = "Select a Task";
+		title.className = "task-menu-title";
+		menu.appendChild(title);
+
+		const hint = document.createElement("div");
+		hint.className = "task-menu-hint";
+		hint.textContent = "Press 1-4 to start, T to close, N for next step";
+		menu.appendChild(hint);
+
+		const taskList = document.createElement("div");
+		taskList.className = "task-list";
+
+		this.state.availableTasks.forEach((task, index) => {
+			const taskCard = document.createElement("div");
+			taskCard.className = "task-card";
+			taskCard.addEventListener("click", () => this._startTask(task.task_id));
+
+			const number = document.createElement("div");
+			number.className = "task-number";
+			number.textContent = index + 1;
+			taskCard.appendChild(number);
+
+			const icon = document.createElement("div");
+			icon.className = "task-icon";
+			icon.textContent = task.icon;
+			taskCard.appendChild(icon);
+
+			const info = document.createElement("div");
+			info.className = "task-info";
+
+			const name = document.createElement("div");
+			name.className = "task-name";
+			name.textContent = task.name;
+			info.appendChild(name);
+
+			const meta = document.createElement("div");
+			meta.className = "task-meta";
+			meta.textContent = `${task.num_steps} steps · ${Math.ceil(
+				task.duration_s / 60
+			)} min`;
+			info.appendChild(meta);
+
+			taskCard.appendChild(info);
+			taskList.appendChild(taskCard);
+		});
+
+		menu.appendChild(taskList);
+		container.appendChild(menu);
 	},
 });

@@ -17,6 +17,15 @@ from pydantic import BaseModel, Field, validator
 
 import cv2
 
+# Import task system
+from backend.task_system import (
+    get_all_tasks,
+    start_task,
+    TaskSession,
+    TaskState,
+    TASKS
+)
+
 LOGGER = logging.getLogger("assistivecoach.backend")
 logging.basicConfig(
     level=logging.INFO,
@@ -120,6 +129,10 @@ class HUDPayload(BaseModel):
     subtitle: Optional[str] = None
     time_left_s: Optional[int] = Field(default=None, ge=0)
     hint: Optional[str] = None
+    instruction: Optional[str] = None
+    max_time_s: Optional[int] = Field(default=None, ge=0)
+    progress: Optional[float] = None
+    coach_tip: Optional[str] = None
 
 
 class OverlayMessage(BaseModel):
@@ -246,6 +259,7 @@ class ConnectionManager:
 settings_state = SettingsState()
 health_state = HealthState()
 session_state = SessionState()
+active_task_session: Optional[TaskSession] = None  # Current active task
 manager = ConnectionManager()
 _executor = ThreadPoolExecutor(max_workers=4)
 _preview_buffer: Optional[bytes] = None
@@ -578,6 +592,219 @@ async def get_preview() -> Response:
     return Response(content=frame, media_type="image/jpeg")
 
 
+# ============================================================================
+# TASK SYSTEM ENDPOINTS
+# ============================================================================
+
+@app.get("/tasks")
+async def list_tasks() -> JSONResponse:
+    """Get list of all available tasks"""
+    tasks = get_all_tasks()
+    return JSONResponse({"tasks": tasks})
+
+
+@app.post("/tasks/{task_id}/start")
+async def start_task_endpoint(task_id: str) -> JSONResponse:
+    """Start a new task"""
+    global active_task_session
+    
+    # Stop any existing task
+    if active_task_session:
+        await broadcast({"type": "overlay.clear"})
+    
+    # Start new task
+    task_session = start_task(task_id)
+    if not task_session:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    
+    active_task_session = task_session
+    
+    # Update session_state for vision pipeline overlay rendering
+    session_state.routine_id = task_id
+    session_state.step_index = 0
+    session_state.started_at = datetime.utcnow()
+    
+    # Get first step
+    step = task_session.get_current_step()
+    if not step:
+        raise HTTPException(status_code=500, detail="Task has no steps")
+    
+    # Speak the first instruction
+    if step.voice_prompt:
+        speak_text(step.voice_prompt)
+    
+    # Send overlay
+    overlay_msg = task_session.to_overlay_message()
+    await broadcast(overlay_msg)
+    
+    return JSONResponse({
+        "ok": True,
+        "task_id": task_id,
+        "task_name": task_session.task.name,
+        "current_step": task_session.current_step,
+        "total_steps": len(task_session.task.steps)
+    })
+
+
+@app.post("/tasks/next_step")
+async def next_step_endpoint() -> JSONResponse:
+    """Advance to next step in active task"""
+    global active_task_session
+    
+    if not active_task_session:
+        raise HTTPException(status_code=400, detail="No active task")
+    
+    # Check if step is complete
+    if not active_task_session.check_step_complete():
+        return JSONResponse({
+            "ok": False,
+            "reason": "Step requirements not met",
+            "time_left": active_task_session.get_time_left_in_step()
+        })
+    
+    # Advance
+    continued = active_task_session.advance_step()
+    
+    # Update session_state for vision pipeline
+    session_state.step_index = active_task_session.current_step - 1  # session_state is 0-indexed
+    
+    if not continued:
+        # Task complete!
+        session_state.routine_id = None
+        session_state.step_index = 0
+        await broadcast({"type": "overlay.clear"})
+        speak_text(f"Great job! You completed {active_task_session.task.name}!")
+        active_task_session = None
+        return JSONResponse({
+            "ok": True,
+            "task_complete": True
+        })
+    
+    # Get new step
+    step = active_task_session.get_current_step()
+    if step and step.voice_prompt:
+        speak_text(step.voice_prompt)
+    
+    # Send overlay
+    overlay_msg = active_task_session.to_overlay_message()
+    await broadcast(overlay_msg)
+    
+    return JSONResponse({
+        "ok": True,
+        "current_step": active_task_session.current_step,
+        "total_steps": len(active_task_session.task.steps)
+    })
+
+
+@app.post("/tasks/stop")
+async def stop_task_endpoint() -> JSONResponse:
+    """Stop current task"""
+    global active_task_session
+    
+    if not active_task_session:
+        return JSONResponse({"ok": True, "message": "No active task"})
+    
+    task_name = active_task_session.task.name
+    active_task_session = None
+    
+    # Clear session_state
+    session_state.routine_id = None
+    session_state.step_index = 0
+    
+    await broadcast({"type": "overlay.clear"})
+    speak_text(f"Task stopped: {task_name}")
+    
+    return JSONResponse({"ok": True, "message": f"Stopped {task_name}"})
+
+# ============================================================================
+# GENAI COACHING (stub heuristics now; replace later with LLM call)
+# ============================================================================
+
+class CoachRequest(BaseModel):
+    task_id: Optional[str] = None
+    step_num: Optional[int] = None
+    user_state: Optional[Dict[str, Any]] = None
+
+class CoachResponse(BaseModel):
+    coach_tip: str
+    source: str
+
+@app.post("/genai/coach", response_model=CoachResponse)
+async def genai_coach(req: CoachRequest) -> CoachResponse:
+    global active_task_session
+    # Derive context from active session if missing
+    task_id = req.task_id or (active_task_session.task.task_id if active_task_session else None)
+    step_num = req.step_num or (active_task_session.current_step if active_task_session else None)
+    if not task_id or not step_num:
+        raise HTTPException(status_code=400, detail="No task context available")
+    task = TASKS.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Unknown task")
+    step = task.get_step(step_num)
+    if not step:
+        raise HTTPException(status_code=404, detail="Unknown step")
+    title = step.title.lower()
+    tip = None
+    if "upper" in title:
+        tip = "Tilt brush 45° toward gums; short circles help remove plaque."
+    elif "lower" in title:
+        tip = "Relax jaw slightly; reach molars with gentle circular passes."
+    elif "tongue" in title:
+        tip = "2–3 light strokes are enough; avoid triggering gag reflex."
+    elif "detangle" in title:
+        tip = "Hold section; work from ends upward to prevent breakage."
+    elif "roots" in title:
+        tip = "Long strokes from roots to tips distribute natural oils."
+    elif "fill" in title or "define" in title:
+        tip = "Feather light strokes following natural hair direction."
+    elif "massage" in title:
+        tip = "Use fingertip pads, gentle circles—avoid eye area."
+    else:
+        tip = step.instruction or "Keep a steady pace—consistency matters."
+    return CoachResponse(coach_tip=tip, source="heuristic-local")
+
+# ============================================================================
+# TTS REPLAY ENDPOINT
+# ============================================================================
+
+@app.post("/tts/replay")
+async def tts_replay() -> JSONResponse:
+    global active_task_session
+    if not active_task_session:
+        raise HTTPException(status_code=400, detail="No active task")
+    step = active_task_session.get_current_step()
+    if not step or not step.voice_prompt:
+        return JSONResponse({"ok": False, "reason": "No voice prompt for this step"})
+    speak_text(step.voice_prompt)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/tasks/current")
+async def get_current_task() -> JSONResponse:
+    """Get current active task status"""
+    global active_task_session
+    
+    if not active_task_session:
+        return JSONResponse({"active": False})
+    
+    step = active_task_session.get_current_step()
+    
+    return JSONResponse({
+        "active": True,
+        "task_id": active_task_session.task.task_id,
+        "task_name": active_task_session.task.name,
+        "current_step": active_task_session.current_step,
+        "total_steps": len(active_task_session.task.steps),
+        "step_title": step.title if step else None,
+        "time_left_s": active_task_session.get_time_left_in_step(),
+        "state": active_task_session.state.value
+    })
+
+
+# ============================================================================
+# WEBSOCKET ENDPOINTS
+# ============================================================================
+
 @app.websocket("/ws")
 async def websocket_root(websocket: WebSocket) -> None:  # new dev-friendly endpoint
     origin = websocket.headers.get("origin")
@@ -655,7 +882,8 @@ async def on_startup() -> None:
             camera_width=1280,
             camera_height=720,
             camera_fps=24,
-            camera_device=0
+            camera_device=0,
+            preview_fn=set_preview_frame  # Pass preview function directly
         )
         _vision_pipeline.start()
         LOGGER.info("Vision pipeline started successfully")
@@ -687,4 +915,6 @@ async def on_startup() -> None:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=5055, reload=False)
+    # Use app:app when running from backend directory, or backend.app:app from project root
+    # Default to port 8000 to match MagicMirror config
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False)
