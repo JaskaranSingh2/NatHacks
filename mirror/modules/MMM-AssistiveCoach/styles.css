@@ -1,16 +1,21 @@
 :root {
+	--bg:#000; --fg:#eaeaea; --muted:#bdbdbd; --ok:#36d399; --warn:#fbbf24; --err:#ef4444; --accent:#00d1ff;
 	--ease-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
 	--ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+	--title-size: clamp(48px, 6vw, 64px);
+	--body-size: 16px;
+	--chip-size: 18px;
 }
 
 body .assistivecoach {
 	font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-	color: #f5f5f5;
+	color: var(--fg);
 	font-size: calc(16px * var(--font-scale, 1));
 	position: relative;
 	width: 100vw;
 	height: 100vh;
 	overflow: hidden;
+	background: var(--bg);
 }
 
 .assistivecoach.high-contrast {
@@ -18,11 +23,10 @@ body .assistivecoach {
 }
 
 /* Reduced Motion Support */
-.prefers-reduced-motion * {
-	animation-duration: 0.01ms !important;
-	animation-iteration-count: 1 !important;
-	transition-duration: 0.01ms !important;
-}
+.prefers-reduced-motion * { animation: none !important; transition: none !important; }
+
+/* Focus visibility */
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 
 /* HUD Animations */
 .hud {
@@ -49,9 +53,9 @@ body .assistivecoach {
 	max-width: 400px;
 	padding: 24px;
 	margin: 32px;
-	background: rgba(20, 20, 20, 0.85);
+	background: rgba(15, 15, 15, 0.85);
 	border-radius: 18px;
-	border: 2px solid #4da3ff;
+	border: 1px solid rgba(255,255,255,.15);
 	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
@@ -149,7 +153,7 @@ body .assistivecoach {
 }
 
 .hud-title {
-	font-size: clamp(48px, 6vw, 64px);
+	font-size: var(--title-size);
 	margin: 0 0 12px 0;
 	font-weight: 700;
 }
@@ -279,20 +283,11 @@ body .assistivecoach {
 	transform: scale(1.05);
 }
 
-.chip--ok {
-	background-color: #4cff8f;
-	color: #052f17;
-}
+.chip--ok { background-color: var(--ok); color: #052f17; }
 
-.chip--warn {
-	background-color: #ffd369;
-	color: #3f2b00;
-}
+.chip--warn { background-color: var(--warn); color: #3f2b00; }
 
-.chip--off {
-	background-color: #555555;
-	color: #f2f2f2;
-}
+.chip--off { background-color: #555555; color: #f2f2f2; }
 
 .assistivecoach .chip {
 	padding: 10px 16px;
