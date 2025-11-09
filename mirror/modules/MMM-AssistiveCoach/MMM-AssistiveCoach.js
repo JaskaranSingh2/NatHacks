@@ -33,6 +33,7 @@ Module.register("MMM-AssistiveCoach", {
 		this.pendingOverlay = null;
 		this.rafScheduled = false;
 		this._setupDomReadyListener();
+		this._setupKeyboardShortcuts();
 		this.sendSocketNotification("MMM_ASSISTIVECOACH_INIT", {
 			wsUrl: this.config.wsUrl,
 		});
@@ -90,6 +91,34 @@ Module.register("MMM-AssistiveCoach", {
 
 	_setupDomReadyListener() {
 		window.addEventListener("resize", () => this._resizeOverlay());
+	},
+
+	_setupKeyboardShortcuts() {
+		document.addEventListener("keydown", (e) => {
+			if (["1", "2", "3"].includes(e.key)) {
+				this._demoStep(Number(e.key));
+			}
+		});
+	},
+
+	_demoStep(n) {
+		const size = 90 + n * 10;
+		const overlay = {
+			type: "overlay.set",
+			shapes: [
+				{ kind: "ring", anchor: { pixel: { x: window.innerWidth / 2, y: window.innerHeight / 2 } }, radius_px: size, accent: "info" },
+			],
+			hud: {
+				title: `Demo Step ${n}`,
+				step: `Step ${n} of 3`,
+				subtitle: "Keyboard preview",
+				time_left_s: 5,
+				max_time_s: 5,
+				hint: "Press 1/2/3 for demo steps",
+			},
+			_local: true,
+		};
+		this._onOverlayMessage(overlay);
 	},
 
 	_resizeOverlay() {
