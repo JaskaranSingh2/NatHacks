@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+import contextlib
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -141,9 +142,10 @@ class VisionPipeline:
         self._aruco_state_since = {}
         self._aruco_debounce_s = 0.25
         self._aruco_last_detection_ns = 0
-        self._aruco_last_meta: Optional[Dict[str, Any]] = None
+        self._aruco_last_detection_s = 0.0  # wall-clock seconds of last successful detection
+        self._aruco_last_meta = None  # type: Optional[Dict[str, Any]]
         self._aruco_pose_announced = False
-        self._last_ar_anchors: List[Dict[str, Any]] = []
+        self._last_ar_anchors = []  # type: List[Dict[str, Any]]
         # Frame gating & overlay throttle
         self._i = 0
         self._overlay_min_interval_ms = 66  # ~15 Hz
@@ -151,6 +153,13 @@ class VisionPipeline:
         # Adaptive performance state
         self._face_frame_stride = 1  # dynamic: may increase under load
         self._aruco_frame_stride = 2  # default every 2 frames; may increase
+        # Respect initial stride from shared settings if provided
+        try:
+            init_stride = int(getattr(self.settings, "aruco_stride", 2))
+            if 1 <= init_stride <= 8:
+                self._aruco_frame_stride = init_stride
+        except Exception:
+            pass
         self._face_target_w = camera_width  # will downscale under load
         self._last_landmarks = {}
         self._high_latency_frames = 0
@@ -318,7 +327,16 @@ class VisionPipeline:
                     self._i += 1
                     run_aruco = (self._i % self._aruco_frame_stride == 0)
                     h, w = frame_rgb.shape[:2]
-                    target_w = 960
+                    # Dynamic detect scale (settings.detect_scale, clamp 0.5..1.0)
+                    detect_scale = getattr(self.settings, "detect_scale", 0.75)
+                    try:
+                        detect_scale = float(detect_scale)
+                    except Exception:
+                        detect_scale = 0.75
+                    detect_scale = min(1.0, max(0.5, detect_scale))
+                    target_w = int(w * detect_scale)
+                    if target_w < 320:
+                        target_w = 320
                     if w > target_w:
                         fx = target_w / float(w)
                         small = cv2.resize(frame_rgb, dsize=None, fx=fx, fy=fx, interpolation=cv2.INTER_AREA)
@@ -330,6 +348,8 @@ class VisionPipeline:
                     if run_aruco:
                         ar_anchors, meta = detect_aruco_anchors(small, pose_enabled=pose_enabled, scale_up=scale_up)
                         self._last_ar_anchors = ar_anchors
+                        if ar_anchors:
+                            self._aruco_last_detection_s = time.time()
                     else:
                         # Use last known anchors; refresh meta from last detection
                         ar_anchors = self._last_ar_anchors
@@ -386,6 +406,26 @@ class VisionPipeline:
             all_landmarks = {**landmarks, **hand_landmarks}
             shapes_start_perf = time.perf_counter()
             overlay_shapes = self._build_shapes(all_landmarks, frame_w, frame_h, ar_anchors)
+
+            # Auto ArUco ring overlays (idle clear after 0.75s)
+            if getattr(self.settings, "overlay_from_aruco", True):
+                now_s = time.time()
+                age_s = now_s - self._aruco_last_detection_s
+                if age_s < 0.75 and self._last_ar_anchors:
+                    for anchor in self._last_ar_anchors:
+                        center = anchor.get("center_px")
+                        if not isinstance(center, dict):
+                            continue
+                        cx = float(center.get("x", 0.0))
+                        cy = float(center.get("y", 0.0))
+                        overlay_shapes.append(
+                            {
+                                "kind": "ring",
+                                "anchor": {"pixel": {"x": cx, "y": cy}},
+                                "radius_px": 60,
+                                "accent": "info",
+                            }
+                        )
 
             if self.settings.aruco and ar_anchors:
                 guidance = self._build_tool_guidance(ar_anchors, all_landmarks, frame_w, frame_h)
@@ -499,6 +539,17 @@ class VisionPipeline:
                 self._high_latency_max_ms = 0.0
             # Adaptive performance adjustments
             self._adapt_performance(e2e_ms)
+            # Simple camera watchdog: if latency remains extreme for a sustained window, attempt soft reset
+            try:
+                if e2e_ms > 1500 and self._latency_window_frames % 30 == 0:
+                    LOGGER.warning("Watchdog: extreme latency detected; attempting camera soft reset")
+                    with contextlib.suppress(Exception):
+                        self.camera.close()
+                    # re-open camera
+                    from backend.camera_capture import CameraCapture
+                    self.camera = CameraCapture(self.frame_w, self.frame_h, 24, 0)
+            except Exception as _wd_exc:  # pragma: no cover
+                LOGGER.debug("Watchdog reset failed: %s", _wd_exc)
         
         LOGGER.info("Vision pipeline processing loop exited")
 
@@ -1044,6 +1095,16 @@ class VisionPipeline:
         self._face_frame_stride = min(max(self._face_frame_stride, 1), 8)
         self._aruco_frame_stride = min(max(self._aruco_frame_stride, 2), 8)
         self._face_target_w = min(max(self._face_target_w, 320), 1280)
+        # Enforce baseline stride from settings (never go below user-requested value)
+        baseline = 2
+        try:
+            baseline = int(getattr(self.settings, "aruco_stride", baseline))
+        except Exception:
+            baseline = 2
+        if baseline < 1:
+            baseline = 1
+        if self._aruco_frame_stride < baseline:
+            self._aruco_frame_stride = baseline
 
 
 # CLI entrypoint for standalone testing
