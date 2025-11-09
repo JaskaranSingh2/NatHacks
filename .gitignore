@@ -63,3 +63,8 @@ node_modules/
 
 # Project logs
 logs/latency.csv
+
+# Google Cloud credentials (security)
+*.json
+!config/*.json
+!test_animation.json

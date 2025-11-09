@@ -28,15 +28,18 @@ logging.basicConfig(
 # --- OpenCV perf knobs (early, process-wide) ---
 try:
     cv2.useOptimized()
-except Exception:
-    pass
+except Exception as exc:
+    logging.debug("OpenCV optimizations unavailable: %s", exc)
 try:
     cv2.setNumThreads(1)
-except Exception:
-    pass
+except Exception as exc:
+    logging.debug("OpenCV setNumThreads unavailable: %s", exc)
 # -----------------------------------------------
 
 # --- WS origin policy (dev-friendly) ---
+# Default "*" allows all origins for development. 
+# For production, set ALLOW_WS_ORIGINS env var to comma-separated list of allowed domains.
+# Example: ALLOW_WS_ORIGINS="https://yourdomain.com,https://mirror.local"
 _WS_ALLOWED = os.getenv("ALLOW_WS_ORIGINS", "*").split(",")
 
 def _ws_origin_ok(origin: Optional[str]) -> bool:
@@ -455,8 +458,8 @@ async def get_health() -> HealthResponse:
         try:
             from backend import ar_overlay as _aru
             intrinsics_error = getattr(_aru, "_INTRINSICS_ERR", intrinsics_error)
-        except Exception:  # pragma: no cover
-            pass
+        except Exception as exc:  # pragma: no cover
+            LOGGER.debug("Could not retrieve intrinsics error: %s", exc)
 
     return HealthResponse(
         camera=health_state.camera,
@@ -529,8 +532,9 @@ async def start_session(payload: SessionRequest) -> JSONResponse:
     try:
         from fastapi.encoders import jsonable_encoder
         session_payload = jsonable_encoder(session_state)
-    except Exception:
+    except Exception as exc:
         # Fallback: manual ISO conversion
+        LOGGER.debug("jsonable_encoder unavailable, using manual conversion: %s", exc)
         session_payload = session_state.dict()
         if isinstance(session_payload.get("started_at"), datetime):
             session_payload["started_at"] = session_payload["started_at"].isoformat() + "Z"
@@ -593,7 +597,8 @@ async def update_settings(payload: SettingsPayload) -> JSONResponse:
     if "detect_scale" in updated:
         try:
             ds = float(settings_state.detect_scale)
-        except Exception:
+        except Exception as exc:
+            LOGGER.debug("Invalid detect_scale value, using default: %s", exc)
             ds = 0.75
         settings_state.detect_scale = min(1.0, max(0.5, ds))
     if _vision_pipeline and {"cloud_rps", "cloud_timeout_s", "cloud_min_interval_ms"}.intersection(updated):

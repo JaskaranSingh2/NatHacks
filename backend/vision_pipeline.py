@@ -22,8 +22,8 @@ LOGGER = logging.getLogger("assistivecoach.vision")
 try:
     cv2.useOptimized()
     cv2.setNumThreads(1)
-except Exception:
-    pass
+except Exception as exc:
+    LOGGER.debug("OpenCV performance tuning unavailable: %s", exc)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FEATURES_PATH = PROJECT_ROOT / "config" / "features.json"
@@ -158,8 +158,8 @@ class VisionPipeline:
             init_stride = int(getattr(self.settings, "aruco_stride", 2))
             if 1 <= init_stride <= 8:
                 self._aruco_frame_stride = init_stride
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Could not read aruco_stride setting, using default: %s", exc)
         self._face_target_w = camera_width  # will downscale under load
         self._last_landmarks = {}
         self._high_latency_frames = 0
@@ -177,9 +177,9 @@ class VisionPipeline:
                     "pose_available": bool(ok),
                     "intrinsics_error": (None if ok else err),
                 }
-        except Exception:
+        except Exception as exc:
             # Safe to ignore; will be populated on first detection
-            pass
+            LOGGER.debug("Could not initialize ArUco intrinsics status: %s", exc)
         
         # Ensure logs directory exists
         LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -331,7 +331,8 @@ class VisionPipeline:
                     detect_scale = getattr(self.settings, "detect_scale", 0.75)
                     try:
                         detect_scale = float(detect_scale)
-                    except Exception:
+                    except Exception as exc:
+                        LOGGER.debug("Invalid detect_scale, using default: %s", exc)
                         detect_scale = 0.75
                     detect_scale = min(1.0, max(0.5, detect_scale))
                     target_w = int(w * detect_scale)
@@ -1099,7 +1100,8 @@ class VisionPipeline:
         baseline = 2
         try:
             baseline = int(getattr(self.settings, "aruco_stride", baseline))
-        except Exception:
+        except Exception as exc:
+            LOGGER.debug("Could not read aruco_stride for performance tuning: %s", exc)
             baseline = 2
         if baseline < 1:
             baseline = 1
