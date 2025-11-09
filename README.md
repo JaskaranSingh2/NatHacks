@@ -142,6 +142,26 @@ If pose disabled or intrinsics missing, pipeline automatically falls back to 2D 
 - Add configurable overlay themes within the MagicMirror module.
 - Package scripts into a simple installer for Raspberry Pi images.
 
+## Accessibility
+
+The Assistive Mirror integrates:
+
+- High contrast HUD with semantic color tokens (`--ok`, `--warn`, `--err`, `--accent`).
+- Typography clamps for large titles (`--title-size`) ensuring distant readability.
+- Reduced motion support: respects OS `prefers-reduced-motion` and a server override (`reduce_motion` via `POST /settings`). Clients remove pulsing/slide animations when active.
+- Keyboard demo shortcuts (1, 2, 3) generate local overlays for offline testing without camera/markers.
+- Focus-visible outlines for clarity when navigating interactive surfaces.
+
+Toggle reduced motion at runtime:
+
+```bash
+curl -X POST http://localhost:5055/settings -H 'Content-Type: application/json' -d '{"reduce_motion": true}'
+```
+
+`/health` includes `reduce_motion` so UIs can synchronize animation state.
+
+See `ACCESSIBILITY.md` for details and guidance when adding new UI motion or colors.
+
 ## License
 
 Internal prototype (unlicensed). Add a formal license before external distribution.

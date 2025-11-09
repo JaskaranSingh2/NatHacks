@@ -106,7 +106,14 @@ Module.register("MMM-AssistiveCoach", {
 		const overlay = {
 			type: "overlay.set",
 			shapes: [
-				{ kind: "ring", anchor: { pixel: { x: window.innerWidth / 2, y: window.innerHeight / 2 } }, radius_px: size, accent: "info" },
+				{
+					kind: "ring",
+					anchor: {
+						pixel: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+					},
+					radius_px: size,
+					accent: "info",
+				},
 			],
 			hud: {
 				title: `Demo Step ${n}`,
