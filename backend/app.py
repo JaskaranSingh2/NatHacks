@@ -137,6 +137,7 @@ class SettingsPayload(BaseModel):
     hands: Optional[bool] = None
     aruco: Optional[bool] = None
     pose: Optional[bool] = None
+    reduce_motion: Optional[bool] = None
     cloud_rps: Optional[int] = Field(default=None, ge=1, le=10)
     cloud_timeout_s: Optional[float] = Field(default=None, ge=0.1, le=3.0)
     cloud_min_interval_ms: Optional[int] = Field(default=None, ge=0)
@@ -171,6 +172,7 @@ class HealthResponse(BaseModel):
     pose_requested: Optional[bool] = None
     pose_available: Optional[bool] = None
     intrinsics_error: Optional[str] = None
+    reduce_motion: Optional[bool] = None
 
 
 class SettingsState(BaseModel):
@@ -179,6 +181,7 @@ class SettingsState(BaseModel):
     hands: bool = True
     aruco: bool = False
     pose: bool = True
+    reduce_motion: bool = False
     cloud_rps: int = 2
     cloud_timeout_s: float = 0.8
     cloud_min_interval_ms: int = 600
@@ -428,6 +431,7 @@ async def get_health() -> HealthResponse:
         pose_requested=pose_requested,
         pose_available=pose_available,
         intrinsics_error=intrinsics_error,
+        reduce_motion=settings_state.reduce_motion,
     )
 
 
@@ -536,6 +540,15 @@ async def update_settings(payload: SettingsPayload) -> JSONResponse:
         except Exception as exc:
             LOGGER.warning("Failed to refresh cloud limits: %s", exc)
     LOGGER.info("Settings updated: %s", updated)
+    # Notify clients when reduce_motion changes so UIs can adjust animations
+    if "reduce_motion" in updated:
+        await broadcast({
+            "type": "status",
+            "camera": health_state.camera,
+            "lighting": health_state.lighting,
+            "fps": health_state.fps,
+            "reduce_motion": settings_state.reduce_motion,
+        })
     return JSONResponse(settings_state.dict())
 
 

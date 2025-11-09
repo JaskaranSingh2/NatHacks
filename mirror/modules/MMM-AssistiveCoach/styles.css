@@ -1,5 +1,11 @@
 :root {
-	--bg:#000; --fg:#eaeaea; --muted:#bdbdbd; --ok:#36d399; --warn:#fbbf24; --err:#ef4444; --accent:#00d1ff;
+	--bg: #000;
+	--fg: #eaeaea;
+	--muted: #bdbdbd;
+	--ok: #36d399;
+	--warn: #fbbf24;
+	--err: #ef4444;
+	--accent: #00d1ff;
 	--ease-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
 	--ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
 	--title-size: clamp(48px, 6vw, 64px);
@@ -23,10 +29,16 @@ body .assistivecoach {
 }
 
 /* Reduced Motion Support */
-.prefers-reduced-motion * { animation: none !important; transition: none !important; }
+.prefers-reduced-motion * {
+	animation: none !important;
+	transition: none !important;
+}
 
 /* Focus visibility */
-:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+:focus-visible {
+	outline: 3px solid var(--accent);
+	outline-offset: 3px;
+}
 
 /* HUD Animations */
 .hud {
@@ -55,7 +67,7 @@ body .assistivecoach {
 	margin: 32px;
 	background: rgba(15, 15, 15, 0.85);
 	border-radius: 18px;
-	border: 1px solid rgba(255,255,255,.15);
+	border: 1px solid rgba(255, 255, 255, 0.15);
 	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
@@ -283,11 +295,20 @@ body .assistivecoach {
 	transform: scale(1.05);
 }
 
-.chip--ok { background-color: var(--ok); color: #052f17; }
+.chip--ok {
+	background-color: var(--ok);
+	color: #052f17;
+}
 
-.chip--warn { background-color: var(--warn); color: #3f2b00; }
+.chip--warn {
+	background-color: var(--warn);
+	color: #3f2b00;
+}
 
-.chip--off { background-color: #555555; color: #f2f2f2; }
+.chip--off {
+	background-color: #555555;
+	color: #f2f2f2;
+}
 
 .assistivecoach .chip {
 	padding: 10px 16px;

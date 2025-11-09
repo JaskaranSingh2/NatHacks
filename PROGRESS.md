@@ -13,15 +13,19 @@
 - Extended FastAPI settings and health models to surface cloud rate limits, breaker state, and metrics in real time.
 - Refreshed top-level documentation to cover credential setup, health monitoring, and the expanded CSV schema.
 - Implemented Step E: ArUco tool guidance with 2D fallback and pose-enabled tilt hints; added subsampled detection, EMA smoothing, and a debounced guidance state machine; created calibration and marker generation scripts.
+- Step F (Accessibility polish) completed: added design tokens, reduced-motion support (OS + server override), keyboard demo shortcuts (viewer + MagicMirror module), focus-visible outlines, standalone mock browser viewer (`tools/viewer.html`), and backend `reduce_motion` setting + `/health` exposure.
 
 ## Open Risks & Follow-Ups
 
 - Cloud assist still needs sustained testing on low-bandwidth networks to tune retry/backoff strategy choices.
 - MagicMirror client should surface cloud availability to end users; today only the backend reports it.
 - Automated coverage does not yet exercise the cloud fusion logic; failures would only show up in manual testing.
+- Need jitter characterization tests for ArUco detection distances and pose tilt stability across lighting scenarios.
+- Guidance state machine needs unit tests for debounce transitions (SEARCHING → ALIGNING → GOOD) under noisy input.
 
 ## Next Actions
 
 1. Run the integrated stack on target Pi hardware, validate ArUco responsiveness and e2e latency ≤150 ms.
-2. Add unit tests for ArUco pose gating and state machine transitions; extend coverage for cloud fusion.
+2. Add unit tests: (a) guidance state machine transitions & debounce, (b) cloud fusion path with synthetic latency.
 3. Surface guidance state and cloud health chips in the MagicMirror HUD; consider SVG icons for tilt arrows.
+4. Add OpenCV jitter benchmark script to log per-frame marker center variance at multiple distances.
