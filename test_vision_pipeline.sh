@@ -9,6 +9,16 @@ echo "Vision Pipeline Test Suite"
 echo "==================================="
 echo ""
 
+# Determine Python interpreter (prefer python3)
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN=python3
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN=python
+else
+    echo "No python interpreter found (python or python3)." >&2
+    exit 1
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -22,7 +32,8 @@ echo "This will test camera capture, MediaPipe processing, and CSV logging"
 echo ""
 
 cd backend
-timeout 10 python vision_pipeline.py || true
+echo "Using interpreter: $PYTHON_BIN"
+timeout 10 $PYTHON_BIN vision_pipeline.py || true
 cd ..
 
 if [ -f "logs/latency.csv" ]; then
@@ -84,7 +95,7 @@ echo ""
 
 # Start backend in background
 cd backend
-python -m uvicorn app:app --host 0.0.0.0 --port 5055 &
+$PYTHON_BIN -m uvicorn app:app --host 0.0.0.0 --port 5055 &
 BACKEND_PID=$!
 cd ..
 

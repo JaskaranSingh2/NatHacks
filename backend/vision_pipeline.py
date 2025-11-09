@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+import contextlib
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -16,6 +17,13 @@ import numpy as np
 from backend.cloud_vision import CloudVisionClient
 
 LOGGER = logging.getLogger("assistivecoach.vision")
+
+# OpenCV performance tuning: pin threads & enable optimizations
+try:
+    cv2.useOptimized()
+    cv2.setNumThreads(1)
+except Exception as exc:
+    LOGGER.debug("OpenCV performance tuning unavailable: %s", exc)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FEATURES_PATH = PROJECT_ROOT / "config" / "features.json"
@@ -128,28 +136,6 @@ class VisionPipeline:
             self._cloud_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="CloudVision")
         self.refresh_cloud_limits()
         self._refresh_cloud_health()
-
-        # ArUco guidance state
-        self._aruco_last_state = {}
-        self._aruco_state_since = {}
-        self._aruco_debounce_s = 0.25
-        self._aruco_last_detection_ns = 0
-        self._aruco_last_meta: Optional[Dict[str, Any]] = None
-        self._aruco_pose_announced = False
-        # Prime intrinsics status once so /health can expose pose availability even before markers appear
-        try:
-            from backend.ar_overlay import load_camera_intrinsics
-            pose_requested = bool(getattr(self.settings, "pose", True))
-            if pose_requested:
-                _k, _d, ok, err = load_camera_intrinsics()
-                self._aruco_last_meta = {
-                    "pose_enabled": pose_requested,
-                    "pose_available": bool(ok),
-                    "intrinsics_error": (None if ok else err),
-                }
-        except Exception:
-            # Safe to ignore; will be populated on first detection
-            pass
         
         # Ensure logs directory exists
         LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -239,7 +225,9 @@ class VisionPipeline:
                 break
             
             frame_count += 1
-            landmark_start = time.time()
+            loop_start_perf = time.perf_counter()
+            capture_end_perf = loop_start_perf  # camera.read already done
+            landmark_start_perf = time.perf_counter()
             self.health.last_frame_ns = capture_ts_ns
 
             # Update any completed cloud vision work before processing this frame.
@@ -255,46 +243,48 @@ class VisionPipeline:
             roi_frame, roi_offset = self._apply_roi(frame_rgb)
 
             # Process landmarks (MediaPipe or synthetic mode)
-            landmarks = self._process_landmarks(roi_frame, roi_offset)
+            process_face = True
+            if self._face_frame_stride > 1:
+                # Only process face landmarks on stride boundary
+                if (frame_count % self._face_frame_stride) != 0:
+                    process_face = False
+            if process_face:
+                # Dynamic downscale for face landmarks
+                face_frame = roi_frame
+                rw = roi_frame.shape[1]
+                if rw > self._face_target_w:
+                    fx = self._face_target_w / float(rw)
+                    face_frame = cv2.resize(roi_frame, dsize=None, fx=fx, fy=fx, interpolation=cv2.INTER_AREA)
+                    face_scale_up = 1.0 / fx
+                else:
+                    face_scale_up = 1.0
+                landmarks = self._process_landmarks(face_frame, roi_offset)
+                # Landmarks already normalized to full-frame; reuse
+                self._last_landmarks = landmarks
+            else:
+                landmarks = self._last_landmarks
+            face_end_perf = time.perf_counter()
 
             # Process hands if enabled
             hand_landmarks: Dict[str, Tuple[float, float]] = {}
+            hands_start_perf = time.perf_counter()
             if self.settings.hands and self._hand_detector:
                 hand_landmarks = self._process_hands(roi_frame, roi_offset)
+            hands_end_perf = time.perf_counter()
 
-            # Detect ArUco markers if enabled
+            # Detect ArUco markers if enabled (downscale & run every 2 frames)
             ar_anchors: List[Dict[str, Any]] = []
+            aruco_start_perf = time.perf_counter()
             if self.settings.aruco:
                 try:
                     from backend.ar_overlay import detect_aruco_anchors
-                    pose_enabled = bool(getattr(self.settings, "pose", True))
-                    ar_anchors, meta = detect_aruco_anchors(frame_rgb, pose_enabled=pose_enabled)
-                    self._aruco_last_meta = meta
-                    # Announce pose availability once on startup
-                    if not self._aruco_pose_announced and meta.get("pose_enabled"):
-                        LOGGER.info(
-                            "ArUco pose availability: %s (error=%s)",
-                            "enabled" if meta.get("pose_available") else "unavailable",
-                            meta.get("intrinsics_error")
-                        )
-                        # Emit a single status message for the UI
-                        self.broadcast_fn(
-                            {
-                                "type": "status",
-                                "camera": getattr(self.health, "camera", "on"),
-                                "detectors": {
-                                    "aruco": True,
-                                    "pose_enabled": bool(meta.get("pose_enabled")),
-                                    "pose_available": bool(meta.get("pose_available")),
-                                },
-                                "intrinsics_error": meta.get("intrinsics_error"),
-                            }
-                        )
-                        self._aruco_pose_announced = True
+                    ar_anchors = detect_aruco_anchors(frame_rgb)
                 except (RuntimeError, ImportError) as exc:
                     LOGGER.debug("ArUco detection unavailable: %s", exc)
+            aruco_end_perf = time.perf_counter()
 
             landmark_ts = time.time()
+            landmarks_done_perf = time.perf_counter()
 
             cloud_latency_ms = 0.0
             cloud_confidence = 0.0
@@ -316,33 +306,33 @@ class VisionPipeline:
 
             # Build overlay message
             all_landmarks = {**landmarks, **hand_landmarks}
+            shapes_start_perf = time.perf_counter()
             overlay_shapes = self._build_shapes(all_landmarks, frame_w, frame_h, ar_anchors)
-
-            if self.settings.aruco and ar_anchors:
-                guidance = self._build_tool_guidance(ar_anchors, all_landmarks, frame_w, frame_h)
-                overlay_shapes.extend(guidance)
             hud = self._build_hud()
+            shapes_end_perf = time.perf_counter()
             
             message = {
                 "type": "overlay.set",
                 "shapes": overlay_shapes,
                 "hud": hud,
             }
-            if self._aruco_last_meta:
-                message["detectors"] = {
-                    "aruco": True,
-                    "pose_enabled": bool(self._aruco_last_meta.get("pose_enabled")),
-                    "pose_available": bool(self._aruco_last_meta.get("pose_available")),
-                }
-                if self._aruco_last_meta.get("intrinsics_error"):
-                    message["intrinsics_error"] = self._aruco_last_meta.get("intrinsics_error")
             
             # Broadcast overlay
             self.broadcast_fn(message)
             overlay_ts = time.time()
+            broadcast_end_perf = time.perf_counter()
             
             # Update health metrics
             e2e_ms = (overlay_ts - capture_ts) * 1000.0
+            loop_end_perf = time.perf_counter()
+            # Timing breakdown (ms)
+            capture_ms = (capture_end_perf - loop_start_perf) * 1000.0
+            face_ms = (face_end_perf - landmark_start_perf) * 1000.0
+            hands_ms = (hands_end_perf - hands_start_perf) * 1000.0
+            aruco_ms = (aruco_end_perf - aruco_start_perf) * 1000.0
+            shapes_ms = (shapes_end_perf - shapes_start_perf) * 1000.0
+            broadcast_ms = (broadcast_end_perf - broadcast_start_perf) * 1000.0
+            other_ms = e2e_ms - (face_ms + hands_ms + aruco_ms + shapes_ms + broadcast_ms)
             self.health.latency_ms = e2e_ms
             self._refresh_cloud_health()
             if self.settings.use_cloud and self._cloud_client.enabled:
@@ -378,7 +368,54 @@ class VisionPipeline:
             # Frame drop handling: if processing is lagging, we naturally drop frames
             # because camera.read() always returns latest frame
             if e2e_ms > 150:
-                LOGGER.warning("Frame %d exceeded latency target: %.1fms", frame_count, e2e_ms)
+                self._high_latency_frames += 1
+                self._high_latency_max_ms = max(self._high_latency_max_ms, e2e_ms)
+            self._latency_window_frames += 1
+            if e2e_ms > 300:
+                LOGGER.warning(
+                    "Frame %d latency=%.1fms breakdown capture=%.1f face=%.1f hands=%.1f aruco=%.1f shapes=%.1f broadcast=%.1f other=%.1f stride(face=%d aruco=%d) target_w(face=%d)",
+                    frame_count,
+                    e2e_ms,
+                    capture_ms,
+                    face_ms,
+                    hands_ms,
+                    aruco_ms,
+                    shapes_ms,
+                    broadcast_ms,
+                    other_ms,
+                    self._face_frame_stride,
+                    self._aruco_frame_stride,
+                    self._face_target_w,
+                )
+            # Aggregate summary every 60 frames
+            if self._latency_window_frames >= 60:
+                if self._high_latency_frames:
+                    LOGGER.warning(
+                        "Latency summary: high=%d/%d frames (%.1f%%) max=%.1fms stride(face=%d aruco=%d) face_w=%d",
+                        self._high_latency_frames,
+                        self._latency_window_frames,
+                        100.0 * self._high_latency_frames / self._latency_window_frames,
+                        self._high_latency_max_ms,
+                        self._face_frame_stride,
+                        self._aruco_frame_stride,
+                        self._face_target_w,
+                    )
+                self._latency_window_frames = 0
+                self._high_latency_frames = 0
+                self._high_latency_max_ms = 0.0
+            # Adaptive performance adjustments
+            self._adapt_performance(e2e_ms)
+            # Simple camera watchdog: if latency remains extreme for a sustained window, attempt soft reset
+            try:
+                if e2e_ms > 1500 and self._latency_window_frames % 30 == 0:
+                    LOGGER.warning("Watchdog: extreme latency detected; attempting camera soft reset")
+                    with contextlib.suppress(Exception):
+                        self.camera.close()
+                    # re-open camera
+                    from backend.camera_capture import CameraCapture
+                    self.camera = CameraCapture(self.frame_w, self.frame_h, 24, 0)
+            except Exception as _wd_exc:  # pragma: no cover
+                LOGGER.debug("Watchdog reset failed: %s", _wd_exc)
         
         LOGGER.info("Vision pipeline processing loop exited")
 
@@ -881,6 +918,60 @@ class VisionPipeline:
                 handle.write(record)
         except Exception as exc:
             LOGGER.warning("Failed to log latency: %s", exc)
+
+    def _adapt_performance(self, e2e_ms: float) -> None:
+        """Dynamically shed load to bring latency back toward target.
+
+        Rules (hysteresis applied):
+          - If latency > 1200ms: increase face stride up to 8, aruco stride up to 6, downscale face target to 640.
+          - If latency > 600ms: face stride min 4, aruco stride min 4, face target 800.
+          - If latency > 300ms: face stride min 2, aruco stride min 3, face target 960.
+          - If latency < 180ms for 3000ms since last adapt: slowly relax (reduce strides, enlarge face target).
+        """
+        now_ns = time.time_ns()
+        # Escalate
+        if e2e_ms > 1200:
+            self._face_frame_stride = max(self._face_frame_stride, 8)
+            self._aruco_frame_stride = max(self._aruco_frame_stride, 6)
+            self._face_target_w = min(self._face_target_w, 640)
+            self._perf_last_adapt_ns = now_ns
+        elif e2e_ms > 600:
+            self._face_frame_stride = max(self._face_frame_stride, 4)
+            self._aruco_frame_stride = max(self._aruco_frame_stride, 4)
+            self._face_target_w = min(self._face_target_w, 800)
+            self._perf_last_adapt_ns = now_ns
+        elif e2e_ms > 300:
+            self._face_frame_stride = max(self._face_frame_stride, 2)
+            self._aruco_frame_stride = max(self._aruco_frame_stride, 3)
+            self._face_target_w = min(self._face_target_w, 960)
+            self._perf_last_adapt_ns = now_ns
+        else:
+            # Relax after sustained low latency
+            since_ms = (now_ns - self._perf_last_adapt_ns) / 1e6
+            if since_ms > 3000 and e2e_ms < 180:
+                if self._face_frame_stride > 1:
+                    self._face_frame_stride -= 1
+                if self._aruco_frame_stride > 2:
+                    self._aruco_frame_stride -= 1
+                # Gradually restore resolution
+                if self._face_target_w < 1280:
+                    self._face_target_w = min(1280, int(self._face_target_w * 1.25))
+                self._perf_last_adapt_ns = now_ns
+        # Safety bounds
+        self._face_frame_stride = min(max(self._face_frame_stride, 1), 8)
+        self._aruco_frame_stride = min(max(self._aruco_frame_stride, 2), 8)
+        self._face_target_w = min(max(self._face_target_w, 320), 1280)
+        # Enforce baseline stride from settings (never go below user-requested value)
+        baseline = 2
+        try:
+            baseline = int(getattr(self.settings, "aruco_stride", baseline))
+        except Exception as exc:
+            LOGGER.debug("Could not read aruco_stride for performance tuning: %s", exc)
+            baseline = 2
+        if baseline < 1:
+            baseline = 1
+        if self._aruco_frame_stride < baseline:
+            self._aruco_frame_stride = baseline
 
 
 # CLI entrypoint for standalone testing

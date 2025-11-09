@@ -4,7 +4,6 @@ import importlib.util
 import json
 import logging
 import subprocess
-import platform
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import lru_cache
@@ -16,11 +15,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, validator
 
+import cv2
+
 LOGGER = logging.getLogger("assistivecoach.backend")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
 )
+
+# --- OpenCV perf knobs (early, process-wide) ---
+try:
+    cv2.useOptimized()
+except Exception as exc:
+    logging.debug("OpenCV optimizations unavailable: %s", exc)
+try:
+    cv2.setNumThreads(1)
+except Exception as exc:
+    logging.debug("OpenCV setNumThreads unavailable: %s", exc)
+# -----------------------------------------------
+
+# --- WS origin policy (dev-friendly) ---
+# Default "*" allows all origins for development. 
+# For production, set ALLOW_WS_ORIGINS env var to comma-separated list of allowed domains.
+# Example: ALLOW_WS_ORIGINS="https://yourdomain.com,https://mirror.local"
+_WS_ALLOWED = os.getenv("ALLOW_WS_ORIGINS", "*").split(",")
+
+def _ws_origin_ok(origin: Optional[str]) -> bool:
+    # Browsers may omit Origin for file://; allow in dev.
+    if not origin or origin == "null" or origin.startswith("file://"):
+        return True
+    if "*" in _WS_ALLOWED:
+        return True
+    # Always allow localhost patterns for dev convenience
+    if any(origin.startswith(p) for p in (
+        "http://localhost", "https://localhost",
+        "http://127.0.0.1", "https://127.0.0.1"
+    )):
+        return True
+    return any(origin.startswith(p) for p in _WS_ALLOWED)
+# ---------------------------------------
 
 app = FastAPI(title="Assistive Coach Backend", version="0.1.0")
 
@@ -28,7 +61,6 @@ ALLOWED_ORIGINS = [
     "http://localhost",
     "http://127.0.0.1",
     "http://localhost:8080",
-    "http://127.0.0.1:8080",
 ]
 
 app.add_middleware(
@@ -92,7 +124,6 @@ class HUDPayload(BaseModel):
 
 class OverlayMessage(BaseModel):
     type: str
-    shapes: Optional[List[Shape]] = None
     hud: Optional[HUDPayload] = None
     camera: Optional[str] = None
     lighting: Optional[str] = None
@@ -136,8 +167,6 @@ class SettingsPayload(BaseModel):
     face: Optional[bool] = None
     hands: Optional[bool] = None
     aruco: Optional[bool] = None
-    pose: Optional[bool] = None
-    reduce_motion: Optional[bool] = None
     cloud_rps: Optional[int] = Field(default=None, ge=1, le=10)
     cloud_timeout_s: Optional[float] = Field(default=None, ge=0.1, le=3.0)
     cloud_min_interval_ms: Optional[int] = Field(default=None, ge=0)
@@ -167,12 +196,6 @@ class HealthResponse(BaseModel):
     latency_ms: float
     vision_state: Optional[Dict[str, Any]] = None
     cloud: Optional[Dict[str, Any]] = None
-    mock_camera: bool
-    camera_error: Optional[str] = None
-    pose_requested: Optional[bool] = None
-    pose_available: Optional[bool] = None
-    intrinsics_error: Optional[str] = None
-    reduce_motion: Optional[bool] = None
 
 
 class SettingsState(BaseModel):
@@ -180,8 +203,6 @@ class SettingsState(BaseModel):
     face: bool = True
     hands: bool = True
     aruco: bool = False
-    pose: bool = True
-    reduce_motion: bool = False
     cloud_rps: int = 2
     cloud_timeout_s: float = 0.8
     cloud_min_interval_ms: int = 600
@@ -402,23 +423,6 @@ async def get_health() -> HealthResponse:
             "last_ok_ns": health_state.cloud_last_ok_ns,
         }
 
-    # Try to fetch last aruco meta from pipeline if present
-    pose_requested = getattr(settings_state, "pose", False)
-    pose_available = False
-    intrinsics_error = None
-    if _vision_pipeline is not None:
-        meta = getattr(_vision_pipeline, "_aruco_last_meta", None)
-        if isinstance(meta, dict):
-            pose_available = bool(meta.get("pose_available", False))
-            intrinsics_error = meta.get("intrinsics_error")
-    # Fallback: if pose requested but unavailable and no intrinsics_error captured yet, surface cached loader error
-    if pose_requested and not pose_available and not intrinsics_error:
-        try:
-            from backend import ar_overlay as _aru
-            intrinsics_error = getattr(_aru, "_INTRINSICS_ERR", intrinsics_error)
-        except Exception:  # pragma: no cover
-            pass
-
     return HealthResponse(
         camera=health_state.camera,
         lighting=health_state.lighting,
@@ -426,12 +430,6 @@ async def get_health() -> HealthResponse:
         latency_ms=health_state.latency_ms,
         vision_state=vision_state,
         cloud=cloud_state,
-        mock_camera=health_state.mock_camera,
-        camera_error=health_state.camera_error,
-        pose_requested=pose_requested,
-        pose_available=pose_available,
-        intrinsics_error=intrinsics_error,
-        reduce_motion=settings_state.reduce_motion,
     )
 
 
@@ -481,7 +479,17 @@ async def start_session(payload: SessionRequest) -> JSONResponse:
         except Exception as exc:
             LOGGER.warning("Failed to send initial HUD: %s", exc)
     
-    return JSONResponse({"status": "started", "session": session_state.dict()})
+    # Use jsonable_encoder for safe datetime serialization
+    try:
+        from fastapi.encoders import jsonable_encoder
+        session_payload = jsonable_encoder(session_state)
+    except Exception as exc:
+        # Fallback: manual ISO conversion
+        LOGGER.debug("jsonable_encoder unavailable, using manual conversion: %s", exc)
+        session_payload = session_state.dict()
+        if isinstance(session_payload.get("started_at"), datetime):
+            session_payload["started_at"] = session_payload["started_at"].isoformat() + "Z"
+    return JSONResponse({"status": "started", "session": session_payload})
 
 
 @app.post("/session/next_step")
@@ -534,6 +542,16 @@ async def update_settings(payload: SettingsPayload) -> JSONResponse:
     updated = payload.dict(exclude_none=True)
     for key, value in updated.items():
         setattr(settings_state, key, value)
+    # Clamp aruco_stride if provided
+    if "aruco_stride" in updated:
+        settings_state.aruco_stride = max(1, min(int(settings_state.aruco_stride), 8))
+    if "detect_scale" in updated:
+        try:
+            ds = float(settings_state.detect_scale)
+        except Exception as exc:
+            LOGGER.debug("Invalid detect_scale value, using default: %s", exc)
+            ds = 0.75
+        settings_state.detect_scale = min(1.0, max(0.5, ds))
     if _vision_pipeline and {"cloud_rps", "cloud_timeout_s", "cloud_min_interval_ms"}.intersection(updated):
         try:
             _vision_pipeline.refresh_cloud_limits()
@@ -560,8 +578,31 @@ async def get_preview() -> Response:
     return Response(content=frame, media_type="image/jpeg")
 
 
+@app.websocket("/ws")
+async def websocket_root(websocket: WebSocket) -> None:  # new dev-friendly endpoint
+    origin = websocket.headers.get("origin")
+    if not _ws_origin_ok(origin):
+        LOGGER.info(f"WS 403 blocked origin={origin!r}")
+        await websocket.close(code=1008)
+        return
+    await manager.connect(websocket)
+    try:
+        while True:
+            # We don't currently expect messages; keep receive to detect client close
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await manager.disconnect(websocket)
+    except Exception as exc:  # pragma: no cover
+        LOGGER.warning("WebSocket error: %s", exc)
+        await manager.disconnect(websocket)
+
 @app.websocket("/ws/mirror")
-async def websocket_endpoint(websocket: WebSocket) -> None:
+async def websocket_endpoint(websocket: WebSocket) -> None:  # legacy path preserved
+    origin = websocket.headers.get("origin")
+    if not _ws_origin_ok(origin):
+        LOGGER.info(f"WS 403 blocked origin={origin!r}")
+        await websocket.close(code=1008)
+        return
     await manager.connect(websocket)
     try:
         while True:

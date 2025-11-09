@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+import logging
+>>>>>>> 3fd54b7223d6d85794d599f6829e5349642b0e6f
 import os
 import platform
 import threading
@@ -8,6 +12,8 @@ import cv2
 import numpy as np
 
 from backend.app import health_state, set_preview_frame
+
+LOGGER = logging.getLogger("assistivecoach.camera")
 
 
 class CameraCapture:
@@ -61,9 +67,15 @@ class CameraCapture:
                     break
                 if cap is not None:
                     cap.release()
+<<<<<<< HEAD
             except Exception:
                 # Continue trying other backends
                 pass
+=======
+            except Exception as exc:
+                # Continue trying other backends
+                LOGGER.debug("Backend %s failed, trying next: %s", backend, exc)
+>>>>>>> 3fd54b7223d6d85794d599f6829e5349642b0e6f
 
         if opened:
             try:
@@ -190,9 +202,15 @@ class CameraCapture:
             cap = getattr(self, "_capture", None)
             if cap is not None and hasattr(cap, "isOpened") and cap.isOpened():
                 cap.release()
+<<<<<<< HEAD
         except Exception:
             # Ensure teardown never crashes
             pass
+=======
+        except Exception as exc:
+            # Ensure teardown never crashes
+            LOGGER.debug("Camera release error (ignored): %s", exc)
+>>>>>>> 3fd54b7223d6d85794d599f6829e5349642b0e6f
         finally:
             health_state.camera = "off"
             health_state.mock_camera = False
@@ -201,5 +219,10 @@ class CameraCapture:
     def __del__(self) -> None:  # pragma: no cover
         try:
             self.close()
+<<<<<<< HEAD
         except Exception:
             pass
+=======
+        except Exception as exc:
+            LOGGER.debug("Camera cleanup error (ignored): %s", exc)
+>>>>>>> 3fd54b7223d6d85794d599f6829e5349642b0e6f

@@ -43,11 +43,10 @@ module.exports = NodeHelper.create({
 		try {
 			this.client = new WebSocket(this.wsUrl);
 		} catch (error) {
-			console.warn("MMM-AssistiveCOach: WS init failed", error);
+			console.warn("MMM-AssistiveCoach: WS init failed", error);
 			connectWithDelay(2000);
 			return;
 		}
-
 		this.client.on("open", () => {
 			this.connected = true;
 			this._retryLevel = 0;

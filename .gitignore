@@ -59,4 +59,16 @@ htmlcov/
 
 # Node (if present for UI)
 node_modules/
+<<<<<<< HEAD
 *.log
+=======
+*.log
+
+# Project logs
+logs/latency.csv
+
+# Google Cloud credentials (security)
+*.json
+!config/*.json
+!test_animation.json
+>>>>>>> 3fd54b7223d6d85794d599f6829e5349642b0e6f
