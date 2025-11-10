@@ -224,7 +224,7 @@ lsof -i :8000
 pkill -f "python3 app.py"
 
 # Restart
-cd ~/Documents/Engineering/Coding/NatHacks/backend
+cd ~/NatHacks/backend
 python3 app.py
 ```
 
