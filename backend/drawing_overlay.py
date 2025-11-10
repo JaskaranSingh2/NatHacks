@@ -3,7 +3,7 @@ Face & landmark detection on sample image
 Overlay drawings to represent task directions
 """
 
-from cloud_vision import CloudVisionClient
+from backend.cloud_vision import CloudVisionClient
 import os
 import cv2
 import numpy as np

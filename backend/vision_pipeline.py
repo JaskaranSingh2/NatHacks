@@ -155,8 +155,6 @@ class VisionPipeline:
             self._cloud_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="CloudVision")
         self.refresh_cloud_limits()
         self._refresh_cloud_health()
-<<<<<<< HEAD
-=======
 
         # ArUco guidance state
         self._aruco_last_state = {}
@@ -202,7 +200,6 @@ class VisionPipeline:
         except Exception as exc:
             # Safe to ignore; will be populated on first detection
             LOGGER.debug("Could not initialize ArUco intrinsics status: %s", exc)
->>>>>>> 7fc4bada007a4fbf81756999578859c9dac03fb9
         
         # Ensure logs directory exists
         LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -703,8 +700,6 @@ class VisionPipeline:
             all_landmarks = {**landmarks, **hand_landmarks}
             shapes_start_perf = time.perf_counter()
             overlay_shapes = self._build_shapes(all_landmarks, frame_w, frame_h, ar_anchors)
-<<<<<<< HEAD
-=======
 
             # Auto ArUco ring overlays (idle clear after 0.75s)
             if getattr(self.settings, "overlay_from_aruco", True):
@@ -738,7 +733,6 @@ class VisionPipeline:
                         overlay_shapes.extend(contextual)
             except Exception as exc:
                 LOGGER.debug("Contextual overlay generation failed: %s", exc)
->>>>>>> 7fc4bada007a4fbf81756999578859c9dac03fb9
             hud = self._build_hud()
             shapes_end_perf = time.perf_counter()
 
