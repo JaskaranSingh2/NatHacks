@@ -19,7 +19,6 @@ class TTS:
     includes caching
     """
     def __init__(self, language_code="en-US", gender="NEUTRAL"):
-        self.client = texttospeech.TextToSpeechClient()
         self.voice = texttospeech.VoiceSelectionParams(
             language_code=language_code,
             ssml_gender=texttospeech.SsmlVoiceGender[gender]
@@ -30,6 +29,7 @@ class TTS:
         self.enabled = False
         self.fail_count = 0
         self.cache = OrderedDict()
+        self.client = None
         
         # handling errors in initialization
         try:
@@ -37,23 +37,23 @@ class TTS:
             self.enabled = True
             LOGGER.info("TTS initialized successfully")
         except DefaultCredentialsError as e:
-            LOGGER.warning("TTS not initialized properly: {e}")
+            LOGGER.warning(f"TTS not initialized properly: {e}")
         except Exception as e:
-            LOGGER.warning("TTS encountered unexpected error during initialization: {e}")
+            LOGGER.warning(f"TTS encountered unexpected error during initialization: {e}")
             
 
     def synthesize(self, text: str, retries=3, delay=0.5):
         """
-        Converts text into speech and returns generated audio (to be saved to file or played live)
+        Converts text into speech 
+        returns generated audio (to be saved to file or played live)
         """
         # initial validation
-        if not self.enabled or not text:
+        if not self.enabled or not text or self.client is None:
             return None
         
         # check cache first
         if text in self.cache:
-            self.cache[text] = response
-            return self.cache[text][1]
+            return self.cache[text]
         
         for attempt in range(retries):
             try:
@@ -143,7 +143,8 @@ class STT:
 
         for attempt in range(self.max_retries):
             try:
-                response = self.client.recognize(config=config, audio=audio)
+                request = speech.RecognizeRequest(config=config, audio=audio)
+                response = self.client.recognize(request=request)
                 if not response.results:
                     return None
                 result_text = response.results[0].alternatives[0].transcript.strip()
@@ -154,5 +155,5 @@ class STT:
             except Exception as e:
                 LOGGER.warning(f"STT.transcribe() encountered unexpected error: {e}")
         
-        return result_text
+        return None
     
