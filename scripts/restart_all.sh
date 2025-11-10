@@ -2,7 +2,7 @@
 # Quick restart script for both backend and MagicMirror
 set -e
 
-BACKEND_DIR="${HOME}/Documents/Engineering/Coding/NatHacks/backend"
+BACKEND_DIR="${HOME}/NatHacks/backend"
 MM_DIR="${HOME}/MagicMirror"
 
 echo "🔄 Restarting AssistiveCoach + MagicMirror"
