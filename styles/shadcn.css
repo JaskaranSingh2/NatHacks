@@ -1,0 +1,42 @@
+:root {
+	--font-sans:
+		"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+		sans-serif;
+	--font-display: "Manrope", var(--font-sans);
+	--font-mono:
+		"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+		"Liberation Mono", "Courier New", monospace;
+	--background: hsl(var(--surface-base-hsl));
+	--foreground: hsl(var(--text-primary-hsl));
+	--card: hsl(var(--surface-card-hsl));
+	--card-foreground: hsl(var(--text-primary-hsl));
+	--popover: hsl(var(--surface-elevated-hsl));
+	--popover-foreground: hsl(var(--text-primary-hsl));
+	--primary: hsl(var(--healthcare-primary-hsl));
+	--primary-foreground: hsl(var(--surface-elevated-hsl));
+	--secondary: hsl(var(--surface-muted-hsl));
+	--secondary-foreground: hsl(var(--text-primary-hsl));
+	--muted: hsl(var(--surface-muted-hsl));
+	--muted-foreground: hsl(var(--text-muted-hsl));
+	--accent: hsl(var(--healthcare-accent-hsl));
+	--accent-foreground: hsl(var(--surface-elevated-hsl));
+	--destructive: hsl(var(--danger-hsl));
+	--destructive-foreground: hsl(var(--surface-elevated-hsl));
+	--border: hsl(var(--border-strong-hsl));
+	--input: hsl(var(--border-soft-hsl));
+	--ring: hsl(var(--focus-ring-hsl));
+	--radius: var(--radius-md);
+}
+
+* {
+	border-color: hsl(var(--border-soft-hsl));
+}
+
+body {
+	background-color: hsl(var(--surface-base-hsl));
+	color: hsl(var(--text-primary-hsl));
+	font-feature-settings:
+		"liga" 1,
+		"kern" 1,
+		"calt" 0;
+}

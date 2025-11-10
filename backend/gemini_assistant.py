@@ -1,7 +1,8 @@
 # gemini_assistant.py
 from google.cloud import aiplatform
 from vertexai.generative_models import GenerativeModel
-from google.api_core.exceptions import GoogleAPICallError, DefaultCredentialsError
+from google.api_core.exceptions import GoogleAPICallError
+from google.auth.exceptions import DefaultCredentialsError
 import logging
 from collections import OrderedDict
 

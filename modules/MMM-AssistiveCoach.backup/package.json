@@ -1,0 +1,17 @@
+{
+    "name": "mmm-assistivecoach",
+    "version": "1.0.0",
+    "description": "MagicMirror² module for AssistiveCoach healthcare UI",
+    "main": "node_helper.js",
+    "scripts": {
+        "install": "echo 'No dependencies required for MagicMirror module'"
+    },
+    "keywords": [
+        "MagicMirror",
+        "healthcare",
+        "assistive",
+        "AR"
+    ],
+    "author": "AssistiveCoach Team",
+    "license": "MIT"
+}

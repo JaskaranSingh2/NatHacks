@@ -1,22 +1,26 @@
 import asyncio
+import base64
 import contextlib
 import importlib.util
 import json
 import logging
 import os
+import platform
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import lru_cache
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, validator
 
 import cv2
+from pathlib import Path
 
 # Import task system
 from backend.task_system import (
@@ -26,6 +30,7 @@ from backend.task_system import (
     TaskState,
     TASKS
 )
+from backend.voice_pipeline import VoiceAssistant, build_voice_assistant_from_env
 
 LOGGER = logging.getLogger("assistivecoach.backend")
 logging.basicConfig(
@@ -69,8 +74,11 @@ app = FastAPI(title="Assistive Coach Backend", version="0.1.0")
 
 ALLOWED_ORIGINS = [
     "http://localhost",
-    "http://127.0.0.1",
+    "http://localhost:5173",
     "http://localhost:8080",
+    "http://127.0.0.1",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8080",
 ]
 
 app.add_middleware(
@@ -171,6 +179,12 @@ class TTSRequest(BaseModel):
         return trimmed
 
 
+class VoiceResponse(BaseModel):
+    transcript: Optional[str]
+    response_text: Optional[str]
+    audio_b64: Optional[str] = None
+
+
 class SessionRequest(BaseModel):
     patient_id: Optional[str]
     routine_id: Optional[str]
@@ -220,6 +234,9 @@ class SettingsState(BaseModel):
     cloud_rps: int = 2
     cloud_timeout_s: float = 0.8
     cloud_min_interval_ms: int = 600
+    aruco_stride: int = 2
+    detect_scale: float = 0.75
+    reduce_motion: bool = False
 
 
 class SessionState(BaseModel):
@@ -268,6 +285,7 @@ _preview_lock = Lock()
 _message_queue: Optional["asyncio.Queue[Dict[str, object]]"] = None
 _broadcast_task: Optional[asyncio.Task] = None
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
+_voice_assistant: Optional[VoiceAssistant] = None
 
 
 async def _broadcast_worker() -> None:
@@ -416,6 +434,16 @@ def speak_text(text: str) -> None:
             LOGGER.warning("espeak-ng fallback failed: %s", exc)
     else:
         LOGGER.warning("No TTS engine available; skipping")
+
+
+@app.on_event("startup")
+async def _init_voice_assistant() -> None:
+    global _voice_assistant
+    try:
+        _voice_assistant = build_voice_assistant_from_env()
+    except Exception as exc:  # pragma: no cover - defensive log
+        LOGGER.warning("Failed to initialise VoiceAssistant: %s", exc)
+        _voice_assistant = None
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -591,6 +619,47 @@ async def get_preview() -> Response:
     if frame is None:
         raise HTTPException(status_code=404, detail="Preview unavailable")
     return Response(content=frame, media_type="image/jpeg")
+
+
+@app.post("/voice/converse", response_model=VoiceResponse)
+async def voice_converse(
+    file: UploadFile = File(...),
+    include_audio: bool = False,
+) -> VoiceResponse:
+    if _voice_assistant is None or not _voice_assistant.enabled:
+        raise HTTPException(status_code=503, detail="Voice assistant unavailable")
+
+    suffix = Path(file.filename or "audio.wav").suffix or ".wav"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            temp_path = Path(tmp.name)
+            data = await file.read()
+            tmp.write(data)
+
+        result = _voice_assistant.converse_with_details(str(temp_path), play_audio=False)
+        if not result:
+            raise HTTPException(status_code=502, detail="Unable to process audio input")
+
+        audio_b64 = None
+        if include_audio and result.audio_bytes:
+            audio_b64 = base64.b64encode(result.audio_bytes).decode("utf-8")
+
+        LOGGER.info(
+            "Voice assistant handled request (transcript_length=%s response_length=%s)",
+            len(result.transcript or ""),
+            len(result.response_text or ""),
+        )
+
+        return VoiceResponse(
+            transcript=result.transcript,
+            response_text=result.response_text,
+            audio_b64=audio_b64,
+        )
+    finally:
+        if temp_path and temp_path.exists():
+            with contextlib.suppress(Exception):
+                temp_path.unlink()
 
 
 # ============================================================================

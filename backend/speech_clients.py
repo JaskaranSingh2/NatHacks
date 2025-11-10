@@ -1,5 +1,6 @@
 from google.cloud import speech, texttospeech
-from google.api_core.exceptions import GoogleAPICallError, DefaultCredentialsError
+from google.api_core.exceptions import GoogleAPICallError
+from google.auth.exceptions import DefaultCredentialsError
 from pydub import AudioSegment
 from pydub.playback import play
 import io, logging, os

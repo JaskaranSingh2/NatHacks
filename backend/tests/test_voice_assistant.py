@@ -12,6 +12,9 @@ import sys
 import tempfile
 import logging
 from pathlib import Path
+from typing import Optional
+
+import numpy as np
 
 # Add project root to Python path to enable imports
 project_root = Path(__file__).parent.parent.parent
@@ -20,6 +23,8 @@ if str(project_root) not in sys.path:
 
 from backend.speech_clients import TTS, STT
 from backend.gemini_assistant import GeminiAssistant
+from backend.vertex_speech import VertexSpeechToText
+from backend.voice_pipeline import VoiceAssistant
 
 # Configure logging for tests
 LOGGER = logging.getLogger("test_voice_assistant")
@@ -78,7 +83,7 @@ class TestTTS:
     def test_tts_synthesize_none_text(self):
         """Test synthesize with None text"""
         tts = TTS()
-        result = tts.synthesize(None)
+        result = tts.synthesize(None)  # type: ignore[arg-type]
         assert result is None, "Should return None for None text"
     
     @pytest.mark.skipif(
@@ -196,6 +201,64 @@ class TestSTT:
                 if result1 is not None:
                     assert test_audio_path in stt.cache, "File should be in cache"
                     assert result1 == result2, "Cached result should match"
+
+
+# ============================================================================
+# VertexSpeechToText Tests
+# ============================================================================
+
+
+class DummyVertexModel:
+    def __init__(self, response_text: str = "unit test transcript"):
+        self.response_text = response_text
+        self.generate_calls = 0
+
+    def generate_content(self, payload):  # pragma: no cover - simple stub
+        self.generate_calls += 1
+
+        class _Response:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        return _Response(self.response_text)
+
+
+class TestVertexSpeechToText:
+    """Test suite for VertexSpeechToText helper"""
+
+    @pytest.fixture
+    def project_id(self):
+        return os.getenv("GOOGLE_CLOUD_PROJECT", "test-project")
+
+    def test_vertex_stt_initialization(self, project_id):
+        stt = VertexSpeechToText(project_id=project_id)
+        assert hasattr(stt, "enabled")
+        assert hasattr(stt, "transcribe")
+
+    def test_vertex_stt_transcribe_disabled(self, tmp_path, project_id):
+        audio_path = tmp_path / "sample.wav"
+        audio_path.write_bytes(b"fake audio")
+        stt = VertexSpeechToText(project_id=project_id)
+        stt.enabled = False
+        stt.model = None
+        result = stt.transcribe(str(audio_path))
+        assert result is None
+
+    def test_vertex_stt_caching_logic(self, tmp_path, project_id):
+        audio_path = tmp_path / "cached.wav"
+        audio_path.write_bytes(b"fake audio cache test")
+        stt = VertexSpeechToText(project_id=project_id)
+        stt.enabled = True
+        stt.model = DummyVertexModel()
+        stt._create_audio_part = lambda *args, **kwargs: (args, kwargs)  # type: ignore
+        result1 = stt.transcribe(str(audio_path))
+        result2 = stt.transcribe(str(audio_path))
+        assert result1 == result2 == "unit test transcript"
+        assert stt.model.generate_calls == 1
+
+
+# ============================================================================
+# GeminiAssistant Tests
 
 
 # ============================================================================
@@ -345,6 +408,101 @@ class TestIntegration:
         LOGGER.info(f"TTS enabled: {tts.enabled}")
         LOGGER.info(f"STT enabled: {stt.enabled}")
         LOGGER.info(f"Gemini enabled: {gemini.enabled}")
+
+
+class DummySTTClient:
+    def __init__(self, transcript: Optional[str] = "brush teeth") -> None:
+        self.enabled = True
+        self.transcript = transcript
+        self.calls = 0
+
+    def transcribe(self, filename: str) -> Optional[str]:
+        self.calls += 1
+        return self.transcript
+
+
+class DummyGeminiClient:
+    def __init__(self, reply: str = "great job") -> None:
+        self.enabled = True
+        self.reply = reply
+        self.calls = 0
+
+    def generate_text(self, prompt: str) -> str:
+        self.calls += 1
+        return self.reply
+
+
+class DummyTTSClient:
+    def __init__(self) -> None:
+        self.enabled = True
+        self.synth_calls = 0
+        self.play_calls = 0
+        self.audio_content = np.random.randint(0, 255, size=128, dtype=np.uint8).tobytes()
+
+    def synthesize(self, text: str):
+        self.synth_calls += 1
+        return type("_Response", (), {"audio_content": self.audio_content})()
+
+    def playAudioOutputLive(self, response):  # noqa: N802 - keep original casing
+        self.play_calls += 1
+
+    def writeAudioOutputToFile(self, response, output_path: str):
+        Path(output_path).write_bytes(self.audio_content)
+        return output_path
+
+
+class TestVoiceAssistantPipeline:
+    """Unit tests for VoiceAssistant orchestration"""
+
+    def test_voice_assistant_with_injected_clients(self):
+        stt = DummySTTClient()
+        gemini = DummyGeminiClient()
+        tts = DummyTTSClient()
+
+        assistant = VoiceAssistant(
+            project_id="test-project",
+            stt_client=stt,
+            llm_client=gemini,
+            tts_client=tts,
+            max_retries=2,
+        )
+
+        assert assistant.enabled
+
+        detailed = assistant.converse_with_details("fake.wav", play_audio=False)
+
+        assert detailed is not None
+        assert detailed.transcript == "brush teeth"
+        assert detailed.response_text == "great job"
+        assert detailed.raw_tts is not None
+        assert isinstance(detailed.audio_bytes, bytes)
+
+        result = assistant.converse("fake.wav", play_audio=False)
+        assert result == "great job"
+        assert stt.calls == 1
+        assert gemini.calls == 1
+        assert tts.synth_calls == 1
+        assert tts.play_calls == 0
+
+    def test_voice_assistant_writes_audio_file(self, tmp_path):
+        stt = DummySTTClient()
+        gemini = DummyGeminiClient()
+        tts = DummyTTSClient()
+
+        assistant = VoiceAssistant(
+            project_id="test-project",
+            stt_client=stt,
+            llm_client=gemini,
+            tts_client=tts,
+            max_retries=1,
+        )
+
+        output_file = tmp_path / "response.mp3"
+        result = assistant.converse(str(tmp_path / "fake.wav"), output_file=str(output_file), play_audio=False)
+
+        assert result == "great job"
+        assert output_file.exists()
+        assert output_file.read_bytes() == tts.audio_content
 
 
 # ============================================================================
