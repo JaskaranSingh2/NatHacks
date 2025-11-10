@@ -761,6 +761,7 @@ class VisionPipeline:
             }
             
             # Broadcast overlay
+            broadcast_start_perf = time.perf_counter()
             self.broadcast_fn(message)
             overlay_ts = time.time()
             broadcast_end_perf = time.perf_counter()
