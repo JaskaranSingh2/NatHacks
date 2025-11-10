@@ -14,7 +14,7 @@ let config = {
 			module: "MMM-AssistiveCoach",
 			position: "fullscreen_above",
 			config: {
-				wsUrl: "ws://127.0.0.1:8000/ws/mirror", // if backend WS enabled
+				wsUrl: "ws://127.0.0.1:8000/ws", // backend WS endpoint
 				apiBase: "http://127.0.0.1:8000",
 				fontScale: 1.0,
 				theme: "high-contrast",

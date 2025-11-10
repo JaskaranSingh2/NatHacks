@@ -1,167 +1,279 @@
-# NatHacks Assistive Mirror
+# NatHacks Assistive Mirror# NatHacks Assistive Mirror
 
-Raspberry Pi smart mirror that guides morning routines with on-device computer vision and an optional Google Cloud Vision assist. Built for <150 ms capture→overlay latency while keeping the UX senior-friendly.
 
-## System At A Glance
 
-- **Edge-first loop:** MediaPipe Face Mesh + hands run locally for low jitter overlays and resilient offline behaviour.
-- **Cloud assist (optional):** Non-blocking Google Cloud Vision fallback refines mouth/cheek landmarks when credentials are present.
-- **HUD overlays:** Animated rings, progress bars, and routine hints streamed to the MagicMirror module via WebSocket.
-- **Observability:** `logs/latency.csv` captures FPS, latency, and new cloud metrics; `/health` exposes a structured status payload for the frontend.
+Raspberry Pi smart mirror that guides morning routines with on-device computer vision and optional Google Cloud Vision assist. Built for <150ms capture→overlay latency while keeping the UX senior-friendly.Raspberry Pi smart mirror that guides morning routines with on-device computer vision and optional Google Cloud Vision assist. Built for <150ms capture→overlay latency while keeping the UX senior-friendly.
 
-## Repository Map
 
-- `backend/app.py` – FastAPI service, REST/WebSocket endpoints, settings/state management.
-- `backend/vision_pipeline.py` – Camera loop, MediaPipe processing, cloud fusion, CSV logging.
-- `backend/cloud_vision.py` – Rate-limited Google Cloud Vision client with caching + circuit breaker.
-- `config/` – Feature indices (`features.json`) and scripted routines (`tasks.json`).
-- `mirror/` – MagicMirror module that renders the overlay stream.
-- `scripts/` – Shell helpers (`test_vision_pipeline.sh`, `test_animations.sh`).
 
-## Getting Started
+## Quick Start## Quick Start
 
-### 1. Backend setup
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
 
-# Run the API (default :5055)
-uvicorn backend.app:app --host 0.0.0.0 --port 5055
-```
+### 1. Backend Setup### 1. Backend Setup
 
-Use `python backend/vision_pipeline.py` for a ten-second standalone smoke test (writes to `logs/latency.csv`).
+```bash```bash
 
-### 2. Optional Google Cloud Vision assist
+python -m venv .venvpython -m venv .venv
 
-1. Provision a Vision API credential and point `GOOGLE_APPLICATION_CREDENTIALS` at the JSON key file.
-2. Start the backend; the client auto-enables when credentials are readable.
-3. Toggle runtime behaviour via `POST /settings`:
+source .venv/bin/activatesource .venv/bin/activate
 
-```bash
-curl -X POST http://localhost:5055/settings \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "use_cloud": true,
-        "cloud_rps": 2,
-        "cloud_timeout_s": 0.8,
-        "cloud_min_interval_ms": 600
-      }'
-```
+pip install -r backend/requirements.txtpip install -r backend/requirements.txt
 
-Cloud requests run in a background worker. The edge loop keeps broadcasting even if the Cloud Vision rate limiter trips or the circuit breaker opens.
+uvicorn backend.app:app --host 0.0.0.0 --port 8000uvicorn backend.app:app --host 0.0.0.0 --port 8000
 
-### 3. MagicMirror module
+``````
 
-Install the `MMM-AssistiveCoach` module under MagicMirror², configure the backend URL (`ws://<host>:5055/ws/mirror`), and start MagicMirror. The module automatically renders `overlay.set` messages and surfaces `/health` status chips.
 
-## Operating Notes
 
-### Key FastAPI endpoints
+### 2. Frontend Build### 2. Frontend Build
 
-- `GET /health` – Returns camera status, FPS/latency, and a `cloud` block (`enabled`, `latency_ms`, `ok_count`, `fail_count`, `breaker_open`, `last_ok_ns`).
-- `POST /settings` – Toggle detectors (`face`, `hands`, `aruco`, `use_cloud`) and adjust cloud rate limits.
-- `POST /session/start` – Begin a guided routine; pipeline pushes HUD metadata immediately.
-- `POST /tts` – Queue speech output via eSpeak-NG or PyTTSx3.
-- `WebSocket /ws/mirror` – Overlay stream for the MagicMirror client.
+```bash```bash
 
-### Observability
+cd frontendcd frontend
 
-`logs/latency.csv` (auto-created) now includes:
+npm installnpm install
 
-```text
-capture_ts,landmark_ts,overlay_ts,e2e_ms,fps,use_cloud,cloud_latency_ms,cloud_confidence,cloud_ok,cloud_breaker_open
-```
+npm run build:mmnpm run build:mm
 
-Use `scripts/test_vision_pipeline.sh` to exercise standalone and integrated modes; it reports average latency, CSV growth, and cloud assist statistics.
+``````
 
-### Development & Testing
 
-#### Running Unit Tests
 
-Pytest covers cloud blending and client caching/rate limiting logic. Run all tests:
+### 3. MagicMirror Setup### 3. MagicMirror Setup
 
-```bash
-python3 -m pytest -q backend/tests
-```
+```bash```bash
 
-#### Hardware Independence
+cd mirrorcd mirror
 
-`VisionPipeline` supports a dummy camera via `camera_enabled=False` so CI and local tests don't require `/dev/video0`.
+npm installnpm install
 
-```python
-pipeline = VisionPipeline(camera_enabled=False)
-```
+npm startnpm start
 
-You can also inject a custom stub with `camera_override` exposing a minimal `read()` returning `(True, frame)`.
+``````
 
-#### Focused Iteration
 
-Run a single test module or increase verbosity while developing:
 
-```bash
-python3 -m pytest backend/tests/test_cloud_blending.py -vv
-```
+## Architecture## Architecture
 
-#### Adding Tests
 
-Place new files under `backend/tests/` named `test_*.py`. Keep tests deterministic: mock time-sensitive cloud calls and fix random seeds. Prefer unit-level checks over full frame loops unless explicitly benchmarking latency.
 
-### Troubleshooting
+- **Backend (FastAPI)**: Computer vision pipeline, WebSocket broadcasting, REST API- **Backend (FastAPI)**: Computer vision pipeline, WebSocket broadcasting, REST API
 
-### Tool Guidance (ArUco)
+- **Frontend (React)**: TypeScript SPA with camera access and AR overlays- **Frontend (React)**: TypeScript SPA with camera access and AR overlays
 
-The mirror can guide tool positioning using printed ArUco markers (OpenCV dictionary **DICT_5X5_250**). Place marker **23** near a toothbrush and marker **42** near a razor. Guidance has two modes:
+- **MagicMirror Module**: Iframe wrapper that embeds the React app- **MagicMirror Module**: Iframe wrapper that embeds the React app
 
-1. 2D fallback (no calibration): distance-only states SEARCHING → ALIGNING → GOOD.
-2. Pose-enabled (after chessboard calibration): adds tilt hints (rotate / tilt) when yaw/pitch exceed tolerances.
 
-Enable guidance:
 
-```bash
-curl -X POST http://localhost:5055/settings -H 'Content-Type: application/json' \
-  -d '{"aruco": true, "pose": true}'
-```
+## Key Components## Key Components
 
-Calibrate (optional for 6DoF): run `python scripts/calibrate_cam.py` and save `config/camera_intrinsics.yml`; then restart backend so pose estimation activates.
 
-Performance: detection subsampled to ~15 Hz and centers / angles smoothed with EMA (α=0.4) to keep CPU low and jitter under ~5 px.
 
-Marker printing: `python scripts/gen_aruco.py --ids 23 42 --size 500 --out markers/`.
+### Backend (`backend/`)### Backend (`backend/`)
 
-If pose disabled or intrinsics missing, pipeline automatically falls back to 2D distance guidance.
+- `app.py` - FastAPI server with WebSocket and REST endpoints- `app.py` - FastAPI server with WebSocket and REST endpoints
 
-- **No camera frames:** Ensure `/dev/video0` is accessible; `backend/camera_capture.py` logs when it cannot open the device.
-- **Cloud assist not engaging:** Verify `GOOGLE_APPLICATION_CREDENTIALS`, then inspect `/health` → `cloud.breaker_open` and the `cloud_*` columns in `logs/latency.csv`.
-- **High latency (>150 ms):** Check for throttled hardware (Pi running in powersave) and confirm that ROI cropping is active by watching the log warnings.
+- `vision_pipeline.py` - MediaPipe face/hands processing with cloud fallback- `vision_pipeline.py` - MediaPipe face/hands processing with cloud fallback
 
-## Roadmap
+- `cloud_vision.py` - Google Cloud Vision client with rate limiting- `cloud_vision.py` - Google Cloud Vision client with rate limiting
 
-- Expand automated tests around the cloud fusion path and CSV parsing.
-- Add configurable overlay themes within the MagicMirror module.
-- Package scripts into a simple installer for Raspberry Pi images.
+- `task_system.py` - Guided routine management- `task_system.py` - Guided routine management
 
-## Accessibility
 
-The Assistive Mirror integrates:
 
-- High contrast HUD with semantic color tokens (`--ok`, `--warn`, `--err`, `--accent`).
-- Typography clamps for large titles (`--title-size`) ensuring distant readability.
-- Reduced motion support: respects OS `prefers-reduced-motion` and a server override (`reduce_motion` via `POST /settings`). Clients remove pulsing/slide animations when active.
-- Keyboard demo shortcuts (1, 2, 3) generate local overlays for offline testing without camera/markers.
-- Focus-visible outlines for clarity when navigating interactive surfaces.
+### Frontend (`frontend/`)### Frontend (`frontend/`)
 
-Toggle reduced motion at runtime:
+- React + TypeScript + Vite + Tailwind CSS- React + TypeScript + Vite + Tailwind CSS
 
-```bash
-curl -X POST http://localhost:5055/settings -H 'Content-Type: application/json' -d '{"reduce_motion": true}'
-```
+- Camera access with getUserMedia- Camera access with getUserMedia
 
-`/health` includes `reduce_motion` so UIs can synchronize animation state.
+- Canvas 2D overlays (rings, text, progress bars)- Canvas 2D overlays (rings, text, progress bars)
 
-See `ACCESSIBILITY.md` for details and guidance when adding new UI motion or colors.
+- WebSocket connection to backend- WebSocket connection to backend
 
-## License
 
-Internal prototype (unlicensed). Add a formal license before external distribution.
+
+### MagicMirror (`modules/MMM-AssistiveCoach/`)### MagicMirror (`modules/MMM-AssistiveCoach/`)
+
+- Iframe wrapper for React SPA- Iframe wrapper for React SPA
+
+- Configuration injection- Configuration injection
+
+- Camera/microphone permissions- Camera/microphone permissions
+
+
+
+## API Endpoints## API Endpoints
+
+
+
+### REST### REST
+
+- `GET /health` - System status (camera, FPS, pose availability)- `GET /health` - System status (camera, FPS, pose availability)
+
+- `POST /settings` - Configure vision pipeline- `POST /settings` - Configure vision pipeline
+
+- `POST /overlay` - Send overlay commands- `POST /overlay` - Send overlay commands
+
+- `POST /session/start` - Begin guided routine- `POST /session/start` - Begin guided routine
+
+
+
+### WebSocket### WebSocket
+
+- `ws://localhost:8000/ws` - Real-time overlay updates- `ws://localhost:8000/ws` - Real-time overlay updates
+
+
+
+## Configuration## Configuration
+
+
+
+### Backend Settings### Backend Settings
+
+```json```json
+
+{{
+
+  "aruco": true,  "aruco": true,
+
+  "pose": true,  "pose": true,
+
+  "overlay_from_aruco": true,  "overlay_from_aruco": true,
+
+  "aruco_stride": 2,  "aruco_stride": 2,
+
+  "detect_scale": 0.75,  "detect_scale": 0.75,
+
+  "reduce_motion": false  "reduce_motion": false
+
+}}
+
+``````
+
+
+
+### MagicMirror Config### MagicMirror Config
+
+```javascript```javascript
+
+{{
+
+  module: "MMM-AssistiveCoach",  module: "MMM-AssistiveCoach",
+
+  position: "fullscreen_above",  position: "fullscreen_above",
+
+  config: {  config: {
+
+    wsUrl: "ws://127.0.0.1:8000/ws",    wsUrl: "ws://127.0.0.1:8000/ws",
+
+    apiBase: "http://127.0.0.1:8000",    apiBase: "http://127.0.0.1:8000",
+
+    reduceMotion: false,    reduceMotion: false,
+
+    showHints: true    showHints: true
+
+  }  }
+
+}}
+
+``````
+
+
+
+## Development## Development
+
+
+
+### Testing### Testing
+
+```bash```bash
+
+# Backend tests# Backend tests
+
+python -m pytest backend/testspython -m pytest backend/tests
+
+
+
+# Vision pipeline test# Vision pipeline test
+
+python backend/vision_pipeline.pypython backend/vision_pipeline.py
+
+
+
+# MagicMirror test# MagicMirror test
+
+cd mirror && npm startcd mirror && npm start
+
+``````
+
+
+
+### Camera Calibration### Camera Calibration
+
+```bash```bash
+
+python scripts/calibrate_cam.pypython scripts/calibrate_cam.py
+
+``````
+
+
+
+### AR Marker Generation### AR Marker Generation
+
+```bash```bash
+
+python scripts/gen_aruco.pypython scripts/gen_aruco.py
+
+``````
+
+
+
+## Troubleshooting## Troubleshooting
+
+
+
+### Common Issues### Common Issues
+
+
+
+1. **Camera not working**: Check `/dev/video0` permissions1. **Camera not working**: Check `/dev/video0` permissions
+
+2. **WebSocket connection failed**: Verify backend is running on port 80002. **WebSocket connection failed**: Verify backend is running on port 8000
+
+3. **MagicMirror not loading**: Run `npm run build:mm` in frontend directory3. **MagicMirror not loading**: Run `npm run build:mm` in frontend directory
+
+4. **Overlays not showing**: Check WebSocket messages in browser dev tools4. **Overlays not showing**: Check WebSocket messages in browser dev tools
+
+
+
+### Logs### Logs
+
+- Backend: `backend.log`- Backend: `backend.log`
+
+- Latency metrics: `logs/latency.csv`- Latency metrics: `logs/latency.csv`
+
+- MagicMirror: Check console in Electron dev tools- MagicMirror: Check console in Electron dev tools
+
+
+
+## Hardware Requirements## Hardware Requirements
+
+
+
+- Raspberry Pi 4+ (8GB RAM recommended)- Raspberry Pi 4+ (8GB RAM recommended)
+
+- Camera module (Pi Camera or USB webcam)- Camera module (Pi Camera or USB webcam)
+
+- Monitor/TV for display- Monitor/TV for display
+
+- Optional: Google Cloud Vision credentials for enhanced accuracy- Optional: Google Cloud Vision credentials for enhanced accuracy
+
+
+
+## License## License
+
+
+
+MITMIT
