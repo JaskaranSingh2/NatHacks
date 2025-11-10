@@ -589,5 +589,3 @@ We welcome contributions from:
 ---
 
 **Built with ❤️ for accessibility and independence.**
-
-_Contact: [Your Email] | GitHub: JaskaranSingh2/NatHacks | Demo: [URL]_
