@@ -1,18 +1,12 @@
 # NatHacks Assistive Mirror# NatHacks Assistive Mirror
 
-
-
 Raspberry Pi smart mirror that guides morning routines with on-device computer vision and optional Google Cloud Vision assist. Built for <150ms capture→overlay latency while keeping the UX senior-friendly.Raspberry Pi smart mirror that guides morning routines with on-device computer vision and optional Google Cloud Vision assist. Built for <150ms capture→overlay latency while keeping the UX senior-friendly.
-
-
 
 ## Quick Start## Quick Start
 
-
-
 ### 1. Backend Setup### 1. Backend Setup
 
-```bash```bash
+`bash`bash
 
 python -m venv .venvpython -m venv .venv
 
@@ -22,7 +16,7 @@ pip install -r backend/requirements.txtpip install -r backend/requirements.txt
 
 uvicorn backend.app:app --host 0.0.0.0 --port 8000uvicorn backend.app:app --host 0.0.0.0 --port 8000
 
-``````
+````
 
 
 
@@ -36,13 +30,11 @@ npm installnpm install
 
 npm run build:mmnpm run build:mm
 
-``````
-
-
+````
 
 ### 3. MagicMirror Setup### 3. MagicMirror Setup
 
-```bash```bash
+`bash`bash
 
 cd mirrorcd mirror
 
@@ -50,7 +42,7 @@ npm installnpm install
 
 npm startnpm start
 
-``````
+````
 
 
 
@@ -150,21 +142,19 @@ npm startnpm start
 
 }}
 
-``````
-
-
+````
 
 ### MagicMirror Config### MagicMirror Config
 
-```javascript```javascript
+`javascript`javascript
 
 {{
 
-  module: "MMM-AssistiveCoach",  module: "MMM-AssistiveCoach",
+module: "MMM-AssistiveCoach", module: "MMM-AssistiveCoach",
 
-  position: "fullscreen_above",  position: "fullscreen_above",
+position: "fullscreen_above", position: "fullscreen_above",
 
-  config: {  config: {
+config: { config: {
 
     wsUrl: "ws://127.0.0.1:8000/ws",    wsUrl: "ws://127.0.0.1:8000/ws",
 
@@ -174,11 +164,11 @@ npm startnpm start
 
     showHints: true    showHints: true
 
-  }  }
+} }
 
 }}
 
-``````
+````
 
 
 
@@ -206,17 +196,15 @@ python backend/vision_pipeline.pypython backend/vision_pipeline.py
 
 cd mirror && npm startcd mirror && npm start
 
-``````
-
-
+````
 
 ### Camera Calibration### Camera Calibration
 
-```bash```bash
+`bash`bash
 
 python scripts/calibrate_cam.pypython scripts/calibrate_cam.py
 
-``````
+````
 
 
 
@@ -226,17 +214,11 @@ python scripts/calibrate_cam.pypython scripts/calibrate_cam.py
 
 python scripts/gen_aruco.pypython scripts/gen_aruco.py
 
-``````
-
-
+````
 
 ## Troubleshooting## Troubleshooting
 
-
-
 ### Common Issues### Common Issues
-
-
 
 1. **Camera not working**: Check `/dev/video0` permissions1. **Camera not working**: Check `/dev/video0` permissions
 
@@ -246,8 +228,6 @@ python scripts/gen_aruco.pypython scripts/gen_aruco.py
 
 4. **Overlays not showing**: Check WebSocket messages in browser dev tools4. **Overlays not showing**: Check WebSocket messages in browser dev tools
 
-
-
 ### Logs### Logs
 
 - Backend: `backend.log`- Backend: `backend.log`
@@ -256,11 +236,7 @@ python scripts/gen_aruco.pypython scripts/gen_aruco.py
 
 - MagicMirror: Check console in Electron dev tools- MagicMirror: Check console in Electron dev tools
 
-
-
 ## Hardware Requirements## Hardware Requirements
-
-
 
 - Raspberry Pi 4+ (8GB RAM recommended)- Raspberry Pi 4+ (8GB RAM recommended)
 
@@ -270,10 +246,6 @@ python scripts/gen_aruco.pypython scripts/gen_aruco.py
 
 - Optional: Google Cloud Vision credentials for enhanced accuracy- Optional: Google Cloud Vision credentials for enhanced accuracy
 
-
-
 ## License## License
-
-
 
 MITMIT
