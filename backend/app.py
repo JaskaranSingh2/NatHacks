@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, validator
 import cv2
 
 # Import task system
-from backend.task_system import (
+from task_system import (
     get_all_tasks,
     start_task,
     TaskSession,
